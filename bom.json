@@ -1,0 +1,62 @@
+{
+    "@class": "c4.system.configuration.ConfigurationInfo",
+    "aliases": {
+        "system-manager": "localhost"
+    },
+    "nodes": {
+        "localhost": {
+            "@class": "c4.system.configuration.NodeInfo",
+            "address": "tcp://127.0.0.1:5000",
+            "devices": {
+                "cpu": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "cpu",
+                    "type": "c4.system.devices.cpu.Cpu"
+                },
+                "disk": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "disk",
+                    "properties": {
+                        "paths": ["/"]
+                    },
+                    "type": "c4.system.devices.disk.Disk"
+                },
+                "loadavg": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "loadavg",
+                    "type": "c4.system.devices.loadavg.LoadAvg"
+                },
+                "memory": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "memory",
+                    "type": "c4.system.devices.mem.Memory"
+                },
+                "swap": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "swap",
+                    "type": "c4.system.devices.swap.Swap"
+                }
+            },
+            "name": "localhost",
+            "role": {
+                "@class": "c4.system.configuration.Roles",
+                "name": "ACTIVE"
+            }
+        }
+    },
+    "platform": {
+        "@class": "c4.system.configuration.PlatformInfo",
+        "historyLimit": 10000,
+        "name": "dev",
+        "settings": {
+            "policy_timer_interval": 5000,
+            "register_timer_interval": 3000,
+			"rest_listen_address": "",
+			"rest_port": 8443,
+			"ssl_certificate_file": "ssl.crt",
+			"ssl_enabled": true,
+			"ssl_key_file": "ssl.key"
+        },
+        "type": "c4.system.platforms.dev.Dev"
+    }
+}

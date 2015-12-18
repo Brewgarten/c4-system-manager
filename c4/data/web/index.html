@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <title>Dynamite Platform Management</title>
+    <!-- Latest compiled and minified CSS -->
+	<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.1/css/bootstrap.min.css">
+	<!-- Optional theme -->
+	<!-- <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.1/css/bootstrap-theme.min.css"> -->
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+    <style type="text/css">
+/*
+ * Base structure
+ */
+
+/* Move down content because we have a fixed navbar that is 50px tall */
+body {
+  padding-top: 50px;
+}
+
+
+/*
+ * Global add-ons
+ */
+
+.sub-header {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+/*
+ * Top navigation
+ * Hide default border to remove 1px line.
+ */
+.navbar-fixed-top {
+  border: 0;
+}
+
+/*
+ * Sidebar
+ */
+
+/* Hide for mobile, show later */
+.sidebar {
+  display: none;
+}
+@media (min-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 51px;
+    bottom: 0;
+    left: 0;
+    z-index: 1000;
+    display: block;
+    padding: 20px;
+    overflow-x: hidden;
+    overflow-y: auto; /* Scrollable contents if viewport is shorter than content. */
+    background-color: #f5f5f5;
+    border-right: 1px solid #eee;
+  }
+}
+
+/* Sidebar navigation */
+.nav-sidebar {
+  margin-right: -21px; /* 20px padding + 1px border */
+  margin-bottom: 20px;
+  margin-left: -20px;
+}
+.nav-sidebar > li > a {
+  padding-right: 20px;
+  padding-left: 20px;
+}
+.nav-sidebar > .active > a,
+.nav-sidebar > .active > a:hover,
+.nav-sidebar > .active > a:focus {
+  color: #fff;
+  background-color: #428bca;
+}
+
+
+/*
+ * Main content
+ */
+
+.main {
+  padding: 20px;
+}
+@media (min-width: 768px) {
+  .main {
+    padding-right: 40px;
+    padding-left: 40px;
+  }
+}
+.main .page-header {
+  margin-top: 0;
+}
+
+
+/*
+ * Placeholder dashboard ideas
+ */
+
+.placeholders {
+  margin-bottom: 30px;
+  text-align: center;
+}
+.placeholders h4 {
+  margin-bottom: 0;
+}
+.placeholder {
+  margin-bottom: 20px;
+}
+.placeholder img {
+  display: inline-block;
+  border-radius: 50%;
+}
+	</style>
+<!--
+	<link rel="stylesheet" href="https://ajax.googleapis.com/ajax/libs/dojo/1.10.2/dijit/themes/claro/claro.css" />
+-->
+<script type="text/javascript">
+var dojoConfig = {
+	async: true,
+	locale: "en",
+	parseOnLoad: true
+};
+</script>
+<script src="https://ajax.googleapis.com/ajax/libs/dojo/1.10.2/dojo/dojo.js"></script>
+<script>
+require(["dojox/charting/Chart",
+         "dojox/charting/plot2d/Pie",
+         "dojox/charting/plot2d/Lines",
+         "dojox/charting/plot2d/StackedAreas",
+         "dojox/charting/action2d/Tooltip",
+         "dojox/charting/axis2d/Default",
+         "dojox/charting/StoreSeries",
+         "dojox/charting/themes/Claro",
+         "dojox/charting/widget/Legend",
+         "dojo/ready",
+         "dojo/request",
+         "dojo/store/JsonRest",
+         "dojo/store/Memory",
+         "dojo/store/Observable",
+         "dojo/dom",
+         "dojo/dom-construct",
+         "dijit/form/Button",
+         "dijit/layout/ContentPane",
+         "dijit/registry",
+         "dojo/_base/array",
+         "dojo/domReady!"],
+     function(Chart,
+    		 Pie,
+    		 Lines,
+    		 StackedAreas,
+    		 Tooltip,
+    		 axisDefault,
+    		 StoreSeries,
+    		 theme,
+    		 Legend,
+    		 ready,
+    		 request,
+    		 JsonRest,
+    		 Memory,
+    		 Observable,
+    		 dom,
+    		 domConstruct,
+    		 Button,
+    		 ContentPane,
+    		 registry,
+    		 arrayUtil
+    		 ) {
+
+/*
+ * primary 	#337AB7
+ * success	#5CB85C
+ * info		#5BC0DE
+ * warning	#F0AD4E
+ * danger	#D9534F
+ */
+var colorMap = {
+	load1: "#D9534F",
+	load5: "#337AB7",
+	load15: "#F0AD4E",
+	used_memory: "#D9534F",
+	cached_memory: "#337AB7",
+	buffer_memory: "#F0AD4E",
+	free_memory: "#5CB85C",
+	running: "#5CB85C",
+	registered: "#F0AD4E",
+	maintenance: "#337AB7",
+	other: "#777"
+}
+
+var systemNodes = [];
+var interval = null;
+
+var nodeOverviewPieChart = null;
+var deviceManagersOverviewPieChart = null;
+
+var cpuUsageCharts = {};
+var cpuUsageChartStores = {};
+var diskUsageCharts = {};
+var diskUsageChartStores = {};
+var loadAverageCharts = {};
+var loadAverageChartStores = {};
+var memoryCharts = {};
+var memoryChartStores = {};
+
+var counter = 0;
+
+/**
+ * Provide a time label for the x axis
+ * @param xValue
+ * @return time label
+ */
+function timeLabel(xValue) {
+	if (xValue == 0) return "now";
+	return xValue + " seconds ago";
+}
+
+/**
+ * Perform initial setup of charts and start the interval timer
+ */
+function setup() {
+
+	request("nodes", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		systemNodes = response.nodes;
+		setupNodeOverviewPieChart();
+		setupDeviceManagersOverviewPieChart();
+		setupCPUUsageCharts(systemNodes, 30);
+		setupDiskUsageCharts(systemNodes, 30);
+		setupLoadAverageCharts(systemNodes, 30);
+		setupMemoryCharts(systemNodes, 30);
+
+		interval = setInterval(function() {
+			updateNodeOverviewPieChart();
+			updateDeviceManagersOverviewPieChart();
+			updateNodeStates();
+			updateDeviceManagerStates();
+			updateCPUUsageCharts();
+			updateDiskUsageCharts();
+			updateLoadAverageCharts();
+			updateMemoryCharts();
+			// TODO: remove after testing
+//			++counter;
+//			if (counter >= 5) clearInterval(interval);
+		}, 1000);
+	});
+}
+
+/**
+ * Set up device manager state overview pie chart
+ */
+function setupDeviceManagersOverviewPieChart() {
+
+	deviceManagersOverviewPieChart = new Chart("deviceManagersOverviewPieChart", {
+		margins: { l : 0, t: 0, r: 0, b: 0}
+	});
+	deviceManagersOverviewPieChart.addPlot("default", {
+				type : "Pie",
+				font : "normal normal 10pt Tahoma",
+				fontColor : "#ccc",
+				fontColor : "black",
+				labelWiring : "#ccc",
+				radius : 100,
+				labelStyle : "columns",
+				htmlLabels : true,
+				startAngle : -10,
+//					labelOffset: -20
+	});
+	deviceManagersOverviewPieChart.addSeries("series", []);
+	deviceManagersOverviewPieChart.render();
+}
+
+/**
+ * Set up node state overview pie chart
+ */
+function setupNodeOverviewPieChart() {
+
+	nodeOverviewPieChart = new Chart("nodesOverviewPieChart", {
+		margins: { l : 0, t: 0, r: 0, b: 0}
+	});
+	nodeOverviewPieChart.addPlot("default", {
+				type : "Pie",
+				font : "normal normal 10pt Tahoma",
+				fontColor : "#ccc",
+				fontColor : "black",
+				labelWiring : "#ccc",
+				radius : 100,
+				labelStyle : "columns",
+				htmlLabels : true,
+				startAngle : -10,
+//					labelOffset: -20
+	});
+	nodeOverviewPieChart.addSeries("series", []);
+	nodeOverviewPieChart.render();
+}
+
+/**
+ * Set up CPU usage charts for the specified nodes
+ * @param nodes
+ * @param lastSeconds
+ */
+function setupCPUUsageCharts(nodes, lastSeconds) {
+
+	arrayUtil.forEach(nodes, function(node) {
+
+		var chartPanel = domConstruct.toDom("<div class='col-md-4'>"
+				+ "<div class='panel panel-default' style='height: 300px;'>"
+				+ "<div class='panel-heading'><h3 class='panel-title'>" + node + "</h3></div>"
+				+ "<div id='" + node + "_cpuUsage' class='panel-body' style='width: 90%; height: 80%;'></div>"
+				+ "</div>"
+				+ "</div>");
+		domConstruct.place(chartPanel, "cpuUsage");
+
+		var chart = new Chart(node + "_cpuUsage", {
+			margins: { l : 0, t: 0, r: 0, b: 0}
+		});
+		cpuUsageCharts[node] = chart;
+		chart.addPlot("default", {
+				type: "Lines",
+				tension: "S"
+		});
+
+		chart.addAxis("x", {
+			microTickStep: 1,
+			minorTickStep: 1,
+			max: lastSeconds,
+			labelFunc: timeLabel
+		});
+		chart.addAxis("y", {
+			vertical: true,
+			fixLower: "major",
+			fixUpper: "major",
+			min: 0,
+			max: 100,
+			majorTickStep: 10,
+			labelFunc: function(value) {return value + "%";}
+		});
+
+		var store = Observable(new Memory({
+			data: {
+				identifier: "timestamp",
+				label: "CPU Usage",
+				items: []
+			}
+		}));
+		cpuUsageChartStores[node] = store;
+
+		chart.addSeries("usage",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "usage"),
+				{
+					stroke: {color: colorMap.load1, width: 1},
+		});
+		chart.addSeries("iowait",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "iowait"),
+				{
+					stroke: {color: colorMap.load15, width: 1},
+		});
+		chart.render();
+	});
+}
+
+/**
+ * Set up disk usage charts for the specified nodes
+ * @param nodes
+ * @param lastSeconds
+ */
+function setupDiskUsageCharts(nodes, lastSeconds) {
+
+	arrayUtil.forEach(nodes, function(node) {
+
+		var chartPanel = domConstruct.toDom("<div class='col-md-4'>"
+				+ "<div class='panel panel-default' style='height: 300px;'>"
+				+ "<div class='panel-heading'><h3 class='panel-title'>" + node + "</h3></div>"
+				+ "<div id='" + node + "_diskUsage' class='panel-body' style='width: 90%; height: 80%;'></div>"
+				+ "</div>"
+				+ "</div>");
+		domConstruct.place(chartPanel, "diskUsage");
+
+		var chart = new Chart(node + "_diskUsage", {
+			margins: { l : 0, t: 0, r: 0, b: 0}
+		});
+		diskUsageCharts[node] = chart;
+		chart.addPlot("default", {
+				type: "StackedAreas",
+				lines: true,
+				areas: true,
+				tension: "S"
+		});
+
+		chart.addAxis("x", {
+			microTickStep: 1,
+			minorTickStep: 1,
+			max: lastSeconds,
+			labelFunc: timeLabel
+		});
+		chart.addAxis("y", {
+			vertical: true,
+			fixLower: "major",
+			fixUpper: "major",
+			min: 0,
+			majorTickStep: 10 * (1024 * 1024),
+			labelFunc: function(value) {return value / (1024 * 1024) + " GB";}
+		});
+
+		var store = Observable(new Memory({
+			data: {
+				identifier: "timestamp",
+				label: "Disk Usage",
+				items: []
+			}
+		}));
+		diskUsageChartStores[node] = store;
+
+		chart.addSeries("used",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "used"),
+				{
+					stroke: {color: colorMap.used_memory, width: 1},
+					fill: colorMap.used_memory
+		});
+		chart.addSeries("free",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "free"),
+				{
+					stroke: {color: colorMap.free_memory, width: 1},
+					fill: colorMap.free_memory
+		});
+		chart.render();
+	});
+}
+
+/**
+ * Set up load average charts for the specified nodes
+ * @param nodes
+ * @param lastSeconds
+ */
+function setupLoadAverageCharts(nodes, lastSeconds) {
+
+	arrayUtil.forEach(nodes, function(node) {
+
+		var chartPanel = domConstruct.toDom("<div class='col-md-4'>"
+				+ "<div class='panel panel-default' style='height: 300px;'>"
+				+ "<div class='panel-heading'><h3 class='panel-title'>" + node + "</h3></div>"
+				+ "<div id='" + node + "_loadAverage' class='panel-body' style='width: 90%; height: 80%;'></div>"
+				+ "</div>"
+				+ "</div>");
+		domConstruct.place(chartPanel, "loadAverage");
+
+		var chart = new Chart(node + "_loadAverage", {
+			margins: { l : 0, t: 0, r: 0, b: 0}
+		});
+		loadAverageCharts[node] = chart;
+//		chart.setTheme(theme);
+		chart.addPlot("default", {
+				type: "Lines",
+				tension: "S"
+		});
+
+		chart.addAxis("x", {
+			microTickStep: 1,
+			minorTickStep: 1,
+			max: lastSeconds,
+			labelFunc: timeLabel
+		});
+		chart.addAxis("y", {
+			vertical: true,
+			fixLower: "major",
+			fixUpper: "major",
+			min: 0,
+			majorTickStep: 1
+		});
+
+		var store = Observable(new Memory({
+			data: {
+				identifier: "timestamp",
+				label: "Load Average",
+				items: []
+			}
+		}));
+		loadAverageChartStores[node] = store;
+
+		chart.addSeries("load1",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "load1"),
+				{
+					stroke: {color: colorMap.load1, width: 1},
+		});
+		chart.addSeries("load5",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "load5"),
+				{
+					stroke: {color: colorMap.load5, width: 1},
+		});
+		chart.addSeries("load15",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "load15"),
+				{
+					stroke: {color: colorMap.load15, width: 1},
+		});
+		chart.render();
+	});
+}
+
+/**
+ * Set up memory usage charts for the specified nodes
+ * @param nodes
+ * @param lastSeconds
+ */
+function setupMemoryCharts(nodes, lastSeconds) {
+
+	arrayUtil.forEach(nodes, function(node) {
+
+		var chartPanel = domConstruct.toDom("<div class='col-md-4'>"
+				+ "<div class='panel panel-default' style='height: 300px;'>"
+				+ "<div class='panel-heading'><h3 class='panel-title'>" + node + "</h3></div>"
+				+ "<div id='" + node + "_memory' class='panel-body' style='width: 90%; height: 80%;'></div>"
+				+ "</div>"
+				+ "</div>");
+		domConstruct.place(chartPanel, "memory");
+
+		var memoryChart = new Chart(node + "_memory", {
+			margins: { l : 0, t: 0, r: 0, b: 0}
+		});
+		memoryCharts[node] = memoryChart;
+//		memoryChart.setTheme(theme);
+		memoryChart.addPlot("default", {
+				type: "StackedAreas",
+				lines: true,
+				areas: true,
+				tension: "S"
+		});
+
+		memoryChart.addAxis("x", {
+			microTickStep: 1,
+			minorTickStep: 1,
+			max: lastSeconds,
+			labelFunc: timeLabel
+		});
+		memoryChart.addAxis("y", {
+			vertical: true,
+			fixLower: "major",
+			fixUpper: "major",
+			min: 0,
+			majorTickStep: (1024 * 1024),
+			labelFunc: function(value) {return value / (1024 * 1024) + " GB";}
+		});
+
+		var store = Observable(new Memory({
+			data: {
+				identifier: "timestamp",
+				label: "Memory",
+				items: []
+			}
+		}));
+		memoryChartStores[node] = store;
+
+		memoryChart.addSeries("used_memory",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "used_memory"),
+				{
+					stroke: {color: colorMap.used_memory, width: 1},
+					fill: colorMap.used_memory
+		});
+		memoryChart.addSeries("cached_memory",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "cached_memory"),
+				{
+					stroke: {color: colorMap.cached_memory, width: 1},
+					fill: colorMap.cached_memory
+		});
+		memoryChart.addSeries("buffer_memory",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "buffer_memory"),
+				{
+					stroke: {color: colorMap.buffer_memory, width: 1},
+					fill: colorMap.buffer_memory
+		});
+		memoryChart.addSeries("free_memory",
+				new StoreSeries(store, {
+					query: {},
+					sort: [{attribute:"timestamp", descending: true}],
+					count: lastSeconds}, "free_memory"),
+				{
+					stroke: {color: colorMap.free_memory, width: 1},
+					fill: colorMap.free_memory
+		});
+		memoryChart.render();
+	});
+}
+
+/**
+ * Update the device manager state overview pie chart using REST
+ */
+function updateDeviceManagersOverviewPieChart() {
+
+	request("nodes/*/devices", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true,
+		timeout: 200
+	}).then(function(response) {
+
+		var running = {fill: colorMap.running, y: 0};
+		var registered = {fill: colorMap.registered, y: 0};
+		var maintenance = {fill: colorMap.maintenance, y: 0};
+		var other = {fill: colorMap.other, y: 0};
+
+		for (var node in response) {
+
+			var nodeInfo = response[node];
+			for (var deviceManager in nodeInfo["devices"]) {
+
+				var deviceManagerInfo = nodeInfo["devices"][deviceManager]
+				if (deviceManagerInfo.state == "registered") {
+					registered.y = registered.y + 1;
+				} else if (deviceManagerInfo.state == "running") {
+					running.y = running.y + 1;
+				} else if (deviceManagerInfo.state == "maintenance") {
+					maintenance.y = maintenance.y + 1;
+				} else {
+					other.y = other.y + 1;
+				}
+			}
+		}
+		deviceManagersOverviewPieChart.updateSeries("series", [running, registered, maintenance, other]);
+		deviceManagersOverviewPieChart.render();
+
+	},function(error){
+        console.log("An error occurred: " + error);
+    });
+}
+
+/**
+ * Update the node state overview pie chart using REST
+ */
+function updateNodeOverviewPieChart() {
+
+	request("nodes/*", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		var running = {fill: colorMap.running, y: 0};
+		var registered = {fill: colorMap.registered, y: 0};
+		var maintenance = {fill: colorMap.maintenance, y: 0};
+		var other = {fill: colorMap.other, y: 0};
+
+		for (var node in response) {
+
+			var nodeInfo = response[node];
+
+			var stateLabel = null;
+			if (nodeInfo["state"] == "registered") {
+				registered.y = registered.y + 1;
+			} else if (nodeInfo["state"] == "running") {
+				running.y = running.y + 1;
+			} else if (nodeInfo["state"] == "maintenance") {
+				maintenance.y = maintenance.y + 1;
+			} else {
+				other.y = other.y + 1;
+			}
+		}
+		nodeOverviewPieChart.updateSeries("series", [running, registered, maintenance, other]);
+		nodeOverviewPieChart.render();
+	});
+}
+
+/**
+ * Update the cpu usage charts using REST
+ */
+function updateCPUUsageCharts() {
+
+	request("nodes/*/devices/cpu", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		var updateTime = new Date().getTime();
+		arrayUtil.forEach(systemNodes, function(node) {
+
+			var cpu = {
+			    usage: 0,
+			    iowait: 0
+			}
+			if (node in response) {
+				cpu = response[node].cpu;
+			}
+			cpu.timestamp = updateTime;
+			cpuUsageChartStores[node].notify(cpu);
+		});
+	});
+}
+
+/**
+ * Update the disk usage charts using REST
+ */
+function updateDiskUsageCharts() {
+
+	request("nodes/*/devices/disk", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		var updateTime = new Date().getTime();
+		arrayUtil.forEach(systemNodes, function(node) {
+
+			var disk = {
+			    used: 0,
+			    free: 0,
+			    usage: 0,
+			    total: 0,
+			    path: "/"
+			}
+			if (node in response) {
+				disk = response[node].disk.disks["/"];
+				disk.free = disk.total - disk.used;
+			}
+			disk.timestamp = updateTime;
+			diskUsageChartStores[node].notify(disk);
+		});
+	});
+}
+
+/**
+ * Update the load average charts using REST
+ */
+function updateLoadAverageCharts() {
+
+	request("nodes/*/devices/loadavg", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		var updateTime = new Date().getTime();
+		arrayUtil.forEach(systemNodes, function(node) {
+
+			var loadavg = {
+					load1: 0,
+					load5: 0,
+					load15: 0
+			}
+			if (node in response) {
+				loadavg["load1"] = response[node].loadavg.load1;
+				loadavg["load5"] = response[node].loadavg.load5;
+				loadavg["load15"] = response[node].loadavg.load15;
+			}
+			loadavg.timestamp = updateTime;
+			loadAverageChartStores[node].notify(loadavg);
+		});
+	});
+}
+
+/**
+ * Update the memory usage charts using REST
+ */
+function updateMemoryCharts() {
+
+	request("nodes/*/devices/memory", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		var updateTime = new Date().getTime();
+		arrayUtil.forEach(systemNodes, function(node) {
+
+			var memory = {
+			    buffer_memory: 0,
+			    cached_memory: 0,
+			    free_memory: 0,
+			    total_memory: 0,
+			    usage: 0,
+			    used_memory: 0
+			}
+			if (node in response) {
+				memory = response[node].memory;
+			}
+			memory.timestamp = updateTime;
+			memoryChartStores[node].notify(memory);
+		});
+	});
+}
+
+/**
+ * Update the device manager states table using REST
+ */
+function updateDeviceManagerStates() {
+
+	request("nodes/*/devices", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true,
+		timeout: 200
+	}).then(function(response) {
+
+		domConstruct.empty("devicesOverviewTable");
+
+		var nodes = [];
+		for (var node in response) {
+			nodes.push(node);
+		}
+		nodes.sort();
+
+		arrayUtil.forEach(nodes, function(node) {
+
+			var nodeInfo = response[node];
+
+			var deviceManagers = [];
+			for (var deviceManager in nodeInfo["devices"]) {
+				deviceManagers.push(deviceManager);
+			}
+			deviceManagers.sort();
+
+			arrayUtil.forEach(deviceManagers, function(deviceManager) {
+
+				var deviceManagerInfo = nodeInfo["devices"][deviceManager]
+
+				var stateLabel = null;
+				if (deviceManagerInfo.state == "registered") {
+					stateLabel = "label-warning";
+				} else if (deviceManagerInfo.state == "running") {
+					stateLabel = "label-success";
+				} else if (deviceManagerInfo.state == "maintenance") {
+					stateLabel = "label-primary";
+				} else {
+					stateLabel = "label-default";
+				}
+
+				var entry = domConstruct.toDom("<tr>"
+						+ "<td>" + node + "</td>"
+						+ "<td>" + deviceManager + "</td>"
+						+ "<td><span class='label " + stateLabel + "'>" + deviceManagerInfo.state + "</span></td>"
+						+ "</tr>");
+				domConstruct.place(entry, "devicesOverviewTable");
+			});
+		});
+
+	},function(error){
+        console.log("An error occurred: " + error);
+    });
+}
+
+/**
+ * Update the node states table using REST
+ */
+function updateNodeStates() {
+
+	request("nodes/*", {
+		query: {
+			user: "dashboard"
+		},
+		handleAs : "json",
+		preventCache: true
+	}).then(function(response) {
+
+		domConstruct.empty("nodesOverviewTable");
+
+		var nodes = [];
+		for (var node in response) {
+			nodes.push(node);
+		}
+		nodes.sort();
+
+		arrayUtil.forEach(nodes, function(node) {
+
+			var nodeInfo = response[node];
+
+			var stateLabel = null;
+			if (nodeInfo["state"] == "registered") {
+				stateLabel = "label-warning";
+			} else if (nodeInfo["state"] == "running") {
+				stateLabel = "label-success";
+			} else if (nodeInfo["state"] == "maintenance") {
+				stateLabel = "label-primary";
+			} else {
+				stateLabel = "label-default";
+			}
+
+			var roleLabel = null;
+			if (nodeInfo["role"] == "active") {
+				roleLabel = "label-success";
+			} else if (nodeInfo["role"] == "passive") {
+				roleLabel = "label-primary";
+			} else {
+				roleLabel = "label-default";
+			}
+
+			var entry = domConstruct.toDom("<tr id='" + node +  "_stateOverview'>"
+					+ "<td>" + node + "</td>"
+					+ "<td>" + nodeInfo["address"] + "</td>"
+					+ "<td><span class='label " + stateLabel + "'>" + nodeInfo["state"] + "</span></td>"
+					+ "<td><span class='label " + roleLabel + "'>" + nodeInfo["role"] + "</span></td>"
+					+ "</tr>");
+			domConstruct.place(entry, "nodesOverviewTable");
+		});
+	});
+}
+
+setup();
+
+}); // dojo close function
+</script>
+  </head>
+<body>
+	<nav class="navbar navbar-inverse navbar-fixed-top" role="navigation">
+		<div class="container-fluid">
+			<div class="navbar-header">
+				<button type="button" class="navbar-toggle collapsed"
+					data-toggle="collapse" data-target="#navbar" aria-expanded="false"
+					aria-controls="navbar">
+					<span class="sr-only">Toggle navigation</span> <span
+						class="icon-bar"></span> <span class="icon-bar"></span> <span
+						class="icon-bar"></span>
+				</button>
+				<a class="navbar-brand" href="#">Dynamite Platform Management</a>
+			</div>
+		</div>
+	</nav>
+
+	<div class="container-fluid">
+		<div class="row">
+			<div class="col-sm-3 col-md-2 sidebar">
+				<ul class="nav nav-sidebar">
+					<li class="active"><a href="#overview">Overview</a></li>
+					<li><a href="#nodesOverview">Nodes</a></li>
+					<li><a href="#devicesOverview">Device Managers</a></li>
+					<li><a href="#cpuUsageHistory">CPU Usage History</a></li>
+					<li><a href="#diskUsageHistory">Disk Usage History</a></li>
+					<li><a href="#loadAverageHistory">Load Average History</a></li>
+					<li><a href="#memoryHistory">Memory History</a></li>
+				</ul>
+			</div>
+			<div class="col-sm-9 col-sm-offset-3 col-md-10 col-md-offset-2 main">
+				<h1 id="overview" class="page-header">Dashboard</h1>
+				<div class="container-fluid">
+					<div class="row placeholders">
+						<div class='col-md-4 placeholder'>
+							<div id="nodesOverviewPieChart"></div>
+							<h4>Nodes</h4>
+						</div>
+						<div class='col-md-4 placeholder'>
+							<div id="deviceManagersOverviewPieChart"></div>
+							<h4>Device Managers</h4>
+						</div>
+					</div>
+					<div class="row">
+						Legend:
+						<span class="label label-warning">registered</span>
+						<span class="label label-success">running</span>
+						<span class="label label-primary">maintenance</span>
+						<span class="label label-default">other</span>
+					</div>
+				</div>
+
+				<h2 id="nodesOverview" class="sub-header">Node States</h2>
+				<div class="table-responsive">
+					<table class="table table-striped">
+						<thead>
+							<tr>
+								<th>Node</th>
+								<th>Address</th>
+								<th>State</th>
+								<th>Role</th>
+							</tr>
+						</thead>
+						<tbody id="nodesOverviewTable">
+						</tbody>
+					</table>
+				</div>
+
+				<h2 id="devicesOverview" class="sub-header">Device Manager States</h2>
+				<div class="table-responsive">
+					<table class="table table-striped">
+						<thead>
+							<tr>
+								<th>Node</th>
+								<th>Name</th>
+								<th>State</th>
+							</tr>
+						</thead>
+						<tbody id="devicesOverviewTable">
+						</tbody>
+					</table>
+				</div>
+
+				<h2 id="cpuUsageHistory" class="sub-header">CPU Usage History</h2>
+				<div class="container-fluid">
+					<div class="row">
+						<div id="cpuUsage"></div>
+					</div>
+					<div class="row">
+						Legend:
+						<span class="label" style="background-color: #D9534F;">Usage</span>
+						<span class="label" style="background-color: #F0AD4E;">IO Wait</span>
+					</div>
+				</div>
+
+				<h2 id="diskUsageHistory" class="sub-header">Disk Usage History</h2>
+				<div class="container-fluid">
+					<div class="row">
+						<div id="diskUsage"></div>
+					</div>
+					<div class="row">
+						Legend:
+						<span class="label" style="background-color: #D9534F;">Used</span>
+						<span class="label" style="background-color: #5CB85C;">Free</span>
+					</div>
+				</div>
+
+				<h2 id="loadAverageHistory" class="sub-header">Load Average History</h2>
+				<div class="container-fluid">
+					<div class="row">
+						<div id="loadAverage"></div>
+					</div>
+					<div class="row">
+						Legend:
+						<span class="label" style="background-color: #D9534F;">1 minute</span>
+						<span class="label" style="background-color: #337AB7;">5 minutes</span>
+						<span class="label" style="background-color: #F0AD4E;">15 minutes</span>
+					</div>
+				</div>
+
+				<h2 id="memoryHistory" class="sub-header">Memory History</h2>
+				<div class="container-fluid">
+					<div class="row">
+						<div id="memory"></div>
+					</div>
+					<div class="row">
+						Legend:
+						<span class="label" style="background-color: #D9534F;">Used</span>
+						<span class="label" style="background-color: #337AB7;">Cached</span>
+						<span class="label" style="background-color: #F0AD4E;">Buffer</span>
+						<span class="label" style="background-color: #5CB85C;">Free</span>
+					</div>
+				</div>
+				<div>
+					<img src="/init.png" width="20%" height="20%" align="center"/>
+				</div>
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>
