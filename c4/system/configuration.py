@@ -10,16 +10,6 @@ from c4.system.db import DBManager
 
 log = logging.getLogger(__name__)
 
-class GPFSRoles(Enum):
-    """
-    Enumeration of GPFS roles
-    """
-    CLIENT = "client"
-    MANAGER = "manager"
-    NON_QUORUM = "nonquorum"
-    QUORUM = "quorum"
-    QUORUM_MANAGER = "quorum-manager"
-
 class Roles(Enum):
     """
     Enumeration of node roles

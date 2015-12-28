@@ -47,7 +47,7 @@ class SystemManager(PeerRouter):
     :raises MessagingException: if either external or internal system manager address is already in use
     """
     def __init__(self, node, clusterInfo, name="SM"):
-        super(SystemManager, self).__init__(node, clusterInfo, "ipc://{}.ipc".format(node), name=name, setParentName=True)
+        super(SystemManager, self).__init__(node, clusterInfo, "ipc://{}.ipc".format(node), name=name)
 
         # FIXME: check which ones need/may to be moved to implementation
         # FIXME: which ones need to stay shared?
@@ -124,9 +124,6 @@ class SystemManagerImplementation(object):
         self.sharedLock.release()
         self.messageTracker = messageTracker
         self.stopFlag = None
-
-        self.policyEngine = None
-        self.alertManager = None
 
         self.processes ={}
 
@@ -236,20 +233,6 @@ class SystemManagerImplementation(object):
             env.Message['NodeInfo'] = node_info.toJSONSerializable(includeClassInfo=True)
             env.Message['version'] = c4.system.__version__
             sendMessageToRouter("ipc://{0}.ipc".format(self.node), env)
-
-    def executePolicyEngine(self):
-        """
-        Execute the policy engine
-        """
-        log.debug("Executing policy engine")
-        self.policyEngine.run()
-
-    def executeAlertManager(self):
-        """
-        Execute the WTi alert manager
-        """
-        log.debug("Executing alert manager")
-        self.alertManager.run()
 
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
@@ -859,6 +842,7 @@ class SystemManagerImplementation(object):
             registerTimer.terminate()
             registerTimer.join()
 
+            # TODO: check and revise if necessary
             # get version for this node's DEPLOYED devices and system-manager
             # versionDict - key is device type and value is the version
             versionDict = {}
@@ -870,45 +854,6 @@ class SystemManagerImplementation(object):
             versionDict["c4.system.manager.SystemManager"] = c4.system.__version__
             response["version_dict"] = versionDict
 
-            # TODO: enable start/stop of policy engine, REST server, etc. based on role changes
-            if self.clusterInfo.role == Roles.ACTIVE:
-
-                # TODO: why is this necessary?
-                # So that when the user queries for version through the REST interface
-                # he/she will get only the version for those devmgr that are actually installed
-                Version.clearVersion()
-
-                configuration = Configuration()
-                platform = configuration.getPlatform()
-
-                # policy engine
-                if platform.settings.get("policy_engine_enabled", True):
-                    self.policyEngine = policyEngine.PolicyEngine()
-                    self.startPolicyEngineTimer()
-
-                # WTi alert manager
-                if platform.settings.get("alert_manager_enabled", False):
-                    self.alertManager = alertManager.AlertManager(
-                        port=platform.settings.get("alert_manager_wti_port", "11081"))
-                    self.startAlertManagerTimer()
-
-                # get SSL options from configuration
-                ssl_enabled = platform.settings.get("ssl_enabled", True)
-                ssl_certificate_file = self.getSSLCertificateFile(platform)
-                ssl_key_file = self.getSSLKeyFile(platform)
-
-                # use rest listen address to limit requests to a particular network, e.g. 127.0.0.1 for localhost only
-                rest_listen_address = platform.settings.get("rest_listen_address", "")
-
-                # REST server
-                rest_port = platform.settings.get("rest_port", 8443)
-                self.processes["restServer"] = RestServer(self.node, self.clusterInfo.getNodeAddress(self.node),
-                                                          rest_port, ssl_enabled, ssl_certificate_file, ssl_key_file,
-                                                          rest_listen_address)
-                # TODO: why daemon?
-                # So that the restServer will exit when the sysmgr exits
-                self.processes["restServer"].daemon = True
-                self.processes["restServer"].start()
         else:
             response["error"] = "Received start message but current state is '{0}'".format(self.clusterInfo.state)
             log.error(response["error"])
