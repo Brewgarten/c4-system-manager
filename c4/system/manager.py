@@ -4,35 +4,32 @@ import argparse
 import datetime
 import imp
 import logging
-import os
-import pkg_resources
-import platform as platformSpec
+from multiprocessing.managers import SyncManager
 import socket
 import sys
 import time
 
-from multiprocessing.managers import SyncManager
+import pkg_resources
 
-import c4.system.actions
-import c4.system.devices
-import c4.system.events
-import c4.system.policies
-import gpfs
-
-from c4.messaging import MessageTracker, MessagingException, PeerRouter, callMessageHandler, sendMessage,\
-    sendMessageToRouter
-from c4.system import db, policyEngine, egg, alertManager
-from c4.system.configuration import DBClusterInfo, Configuration, NodeInfo, States, Roles, GPFSClusterInfo,\
-    ConfigurationInfo
+from c4.messaging import (MessageTracker, MessagingException, PeerRouter,
+                          callMessageHandler, sendMessage, sendMessageToRouter)
+from c4.system import db, egg
+from c4.system.configuration import (DBClusterInfo, Configuration, NodeInfo,
+                                     States, Roles, ConfigurationInfo)
 from c4.system.deviceManager import DeviceManager
-from c4.system.messages import Envelope, StartDeviceManagers, Status, StopDeviceManagers, LocalStartDeviceManager, LocalStopDeviceManager, \
-    RegistrationNotification, LocalUnregisterDeviceManagers, UnregisterNode, DisableDeviceManager, DisableNode, EnableDeviceManager, \
-    EnableNode, StartNode, StopNode, LocalStopNode, RegisterDeviceManager
-from c4.utils.util import Timer, disableInterruptSignal, getFullModuleName, getModuleClasses, exclusiveWrite
-from c4.system.rest import RestServer
+import c4.system.devices
+from c4.system.messages import (StartDeviceManagers, LocalStartDeviceManager, LocalStopDeviceManager,
+                                RegistrationNotification, DisableNode,
+                                StartNode, StopNode, LocalStopNode)
 from c4.system.version import Version
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
+from c4.utils.util import (Timer, disableInterruptSignal,
+                           getFullModuleName, getModuleClasses)
+
+# TODO: check what this is used for
+import platform as platformSpec
+
 
 log = logging.getLogger(__name__)
 
@@ -315,33 +312,7 @@ class SystemManagerImplementation(object):
                 node_dict[node_name] = valid_devices_dict
         return node_dict
 
-    @classmethod
-    def getSSLCertificateFile(cls, platform):
-        """
-        Gets the path of the SSL certificate file.
-
-        If the SSL certificate file is just a filename, then assume it resides in the data directory.
-        """
-        ssl_certificate_file = platform.settings.get("ssl_certificate_file", "ssl.crt")
-        # if there is no path, then assume the file is in the data dir
-        if os.path.dirname(ssl_certificate_file) == "":
-            ssl_certificate_file = pkg_resources.resource_filename("c4.data", "ssl/" + ssl_certificate_file)  # @UndefinedVariable
-        return ssl_certificate_file
-
-    @classmethod
-    def getSSLKeyFile(cls, platform):
-        """
-        Gets the path of the SSL key file.
-
-        If the SSL key file is just a filename, then assume it resides in the data directory.
-        """
-        ssl_key_file = platform.settings.get("ssl_key_file", "ssl.key")
-        # if there is no path, then assume the file is in the data dir
-        if os.path.dirname(ssl_key_file) == "":
-            ssl_key_file = pkg_resources.resource_filename("c4.data", "ssl/" + ssl_key_file)  # @UndefinedVariable
-        return ssl_key_file
-
-    def handleDeploydevicemanager(self, message, envelope):
+    def handleDeployDeviceManager(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.DeployDeviceManager` messages.
         A message from the rest server to the active system manager to distribute and install the
@@ -355,22 +326,6 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         log.info("Deploy device manager request from %s", envelope.From)
-        self._handleDeployEgg(message, envelope)
-
-    def handleDeploypolicy(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.DeployPolicy` messages.
-        A message from the rest server to the active system manager to distribute and install the
-        custom policy egg.
-        Or a message from the active system manager to the other system managers to install the
-        custom policy egg.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Deploy policy request from %s", envelope.From)
         self._handleDeployEgg(message, envelope)
 
     def handleDisableDeviceManager(self, message, envelope):
@@ -467,176 +422,6 @@ class SystemManagerImplementation(object):
         # Received request to change the state of a node
         Configuration().changeState(node_name, None, States.MAINTENANCE)
 
-    def handleDisableDeviceManagerRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.DisableDeviceManagerRequest` messages.
-        A message from the rest server to the active system manager to disable one or more device managers.
-        Changes device state from RUNNING to MAINTENANCE or REGISTERED to MAINTENANCE.
-
-        The message contains an attribute called names which is a list of device manager names to disable.
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Disable device manager request from %s for %s on %s",
-                     envelope.From, message["names"], message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received disable device manager request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configurationInfo = Configuration().toInfo()
-        try:
-            node_dict = self.getNodeDictFromDeviceList(message["names"], node_list,
-                                                       configurationInfo)
-        except Exception, e:
-            return {"error": str(e)}
-
-        # validate state
-        stop_dict = {}
-        for node_name, device_dict in node_dict.iteritems():
-            for device_name in device_dict.keys():
-                device_state = device_dict[device_name].state
-                # REGISTERED to MAINTENANCE
-                # already MAINTENANCE, then do nothing
-                if device_state == States.MAINTENANCE:
-                    # done with this device
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to disable %s/%s because it is already disabled.",
-                                 node_name, device_name)
-                elif device_state == States.RUNNING:
-                    # add to stop list
-                    if node_name in stop_dict:
-                        device_dict2 = stop_dict[node_name]
-                    else:
-                        device_dict2 = {}
-                        stop_dict[node_name] = device_dict2
-                    device_dict2[device_name] = device_dict[device_name]
-                    # remove device from node dict
-                    del device_dict[device_name]
-                # else invalid state
-                elif device_state != States.REGISTERED:
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to disable %s/%s because it has an invalid state of %s.  State should be %s or %s.",
-                                 node_name, device_name, device_state.value, States.REGISTERED.value, States.RUNNING.value) # @UndefinedVariable
-
-        # stop all RUNNING devices and then set them to MAINTENANCE later
-        for node_name, device_dict in stop_dict.iteritems():
-            disable_message = DisableDeviceManager(node_name)
-            disable_message.Message["devices"] = device_dict
-            self.messageTracker.add(disable_message)
-
-            # send stop to each node with a list of devices to stop
-            stop_message = StopDeviceManagers(node_name)
-            self.messageTracker.addRelatedMessage(disable_message.MessageID, stop_message.MessageID)
-            stop_message.Message["devices"] = device_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), stop_message)
-
-        # disable devices that are REGISTERED
-        for node_name, device_dict in node_dict.iteritems():
-            # if no devices for this node, then skip to next node
-            if len(device_dict) == 0:
-                continue
-            # send disable to each node with a list of devices to disable
-            disable_message = DisableDeviceManager(node_name)
-            disable_message.Message["devices"] = device_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), disable_message)
-
-        return {"response": "sent"}
-
-    def handleDisableNodeRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.DisableNodeRequest` messages.
-        A message from the rest server to the active system manager to disable one or more nodes.
-        Changes state from REGISTERED to MAINTENANCE
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Disable node request from %s for %s", envelope.From, message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received disable node request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configuration = Configuration()
-        # validate state
-        for node in node_list:
-            disable_message = DisableNode(node)
-            nodeState = configuration.getState(node)
-            if nodeState == States.MAINTENANCE:
-                log.debug("{0} is already disabled".format(node))
-            elif nodeState == States.RUNNING:
-                log.debug("{0} needs to be put into REGISTERED state first".format(node))
-                self.messageTracker.add(disable_message)
-                stop_env = StopNode(node)
-                self.messageTracker.add(stop_env)
-                self.messageTracker.addRelatedMessage(disable_message.MessageID, stop_env.MessageID)
-                sendMessage(self.clusterInfo.getNodeAddress(node), stop_env)
-            else:
-                # disable nodes that are REGISTERED
-                sendMessage(self.clusterInfo.getNodeAddress(node), disable_message)
-
-        return {"response": "sent"}
-
-    def handleDisablePolicyRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.DisablePolicyRequest` messages.
-        A message from the REST server to the active system manager to
-        disable one or more policies
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Disable policy request from %s for %s",
-                    envelope.From, message)
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received disable policy request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-        if self.policyEngine is None:
-            log.error("Cannot disable policy because the policy engine has not been initialized.")
-        else:
-            # stop the timer because we need to modify the policy engine
-            # and it is running in another process
-            self.stopPolicyEngineTimer()
-
-            # "*" is wildcard for all policies
-            all_policies = "*" in message["policies"]
-            # go through all policies and if id matches a policy in the given list, then disable it
-            for policy in self.policyEngine.policies.itervalues():
-                if all_policies or policy.id in message["policies"]:
-                    self.policyEngine.disablePolicy(policy)
-
-            self.startPolicyEngineTimer()
-
-        return {"response": "sent"}
-
     def handleEnableDeviceManager(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.Enable` messages.
@@ -701,71 +486,6 @@ class SystemManagerImplementation(object):
                     log.debug("Sending original start message: %s to %s", original_message.Message, original_message.To)
                     sendMessage(self.clusterInfo.getNodeAddress(envelope.From), original_message)
 
-    def handleEnableDeviceManagerRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.EnableDeviceManagerRequest` messages.
-        A message from the rest server to the active system manager to enable one or more device managers.
-        Changes state from MAINTENANCE to REGISTERED.
-
-        The message contains an attribute called names which is a list of device manager names to enable.
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Enable device manager request from %s for %s on %s",
-                     envelope.From, message["names"], message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received enable device manager request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configurationInfo = Configuration().toInfo()
-        try:
-            node_dict = self.getNodeDictFromDeviceList(message["names"], node_list,
-                                                       configurationInfo)
-        except Exception, e:
-            return {"error": str(e)}
-
-        # validate state
-        for node_name, device_dict in node_dict.iteritems():
-            for device_name in device_dict.keys():
-                device_state = device_dict[device_name].state
-                # already MAINTENANCE, then do nothing
-                if device_state == States.REGISTERED:
-                    # done with this device
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to enable %s/%s because it is already enabled.",
-                                 node_name, device_name)
-                # else invalid state
-                elif device_state != States.MAINTENANCE:
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to enable %s/%s because it has an invalid state of %s.  State should be %s.",
-                                 node_name, device_name, device_state.value, States.MAINTENANCE.value) # @UndefinedVariable
-
-        # enable devices that are MAINTENANCE
-        for node_name, device_dict in node_dict.iteritems():
-            # if no devices for this node, then skip to next node
-            if len(device_dict) == 0:
-                continue
-            # send enable to each node with a list of devices to enable
-            enable_message = EnableDeviceManager(node_name)
-            enable_message.Message["devices"] = device_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), enable_message)
-
-        return {"response": "sent"}
-
     def handleEnableNode(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.EnableNode` messages.
@@ -807,354 +527,6 @@ class SystemManagerImplementation(object):
 
         # Received request to change the state of a node
         Configuration().changeState(node_name, None, States.REGISTERED)
-
-    def handleEnableNodeRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.EnableNodeRequest` messages.
-        A message from the rest server to the active system manager to enable one or more nodes.
-        Changes state from MAINTENANCE to REGISTERED.
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Enable node request from %s for %s", envelope.From, message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received enable node request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configuration = Configuration()
-        # validate state
-        for node in node_list:
-            if configuration.getState(node) != States.MAINTENANCE:
-                log.debug("{0} is already enabled".format(node))
-            else:
-                # enable nodes that are MAINTENANCE
-                enable_message = EnableNode(node)
-                sendMessage(self.clusterInfo.getNodeAddress(node), enable_message)
-
-        return {"response": "sent"}
-
-    def handleEnablePolicyRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.EnablePolicyRequest` messages.
-        A message from the REST server to the active system manager to
-        enable one or more policies
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Enable policy request from %s for %s",
-                    envelope.From, message)
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received enable policy request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-        if self.policyEngine is None:
-            log.error("Cannot enable policy because the policy engine has not been initialized.")
-        else:
-            # stop the timer because we need to modify the policy engine
-            # and it is running in another process
-            self.stopPolicyEngineTimer()
-
-            # "*" is wildcard for all policies
-            all_policies = "*" in message["policies"]
-            # go through all policies and if id matches a policy in the given list, then enable it
-            for policy in self.policyEngine.policies.itervalues():
-                if all_policies or policy.id in message["policies"]:
-                    self.policyEngine.enablePolicy(policy)
-
-            self.startPolicyEngineTimer()
-
-        return {"response": "sent"}
-
-    def handleGPFSClusterManagerTakeOverNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSClusterManagerTakeOverNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        # This notification is special in that it will go to every local system manager
-        # so that the sys mgr can update its cluster information
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-        # Step 1: Update the cluster info
-        port = '5000'
-        try:
-            with open('/tmp/port_for_zeromq', 'r') as f:
-                port = f.readline().strip()
-        except:
-            pass
-        sysmgr_ip = self.clusterInfo.getNodeAddress(message['clusterManager'])
-
-        configuration = Configuration()
-        if self.clusterInfo.role == Roles.ACTIVE or self.clusterInfo.role == Roles.PASSIVE:
-            configuration.changeAlias('system-manager', message['clusterManager'])
-            if self.clusterInfo.role == Roles.ACTIVE:
-                configuration.changeRole(self.node, Roles.PASSIVE)
-                self.clusterInfo.role = Roles.PASSIVE
-        self.clusterInfo.systemManagerAddress = sysmgr_ip
-
-    def handleGPFSDiskFailureNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSDiskFailureNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSFilesetLimitExceededNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSFilesetLimitExceededNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSLowDiskSpaceNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreLowDiskSpaceNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSMountNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSMountNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSNodeJoinNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSNodeJoinNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSNodeLeaveNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSNodeLeaveNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-
-    def handleGPFSNoDiskSpaceNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreNoDiskSpaceNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.Notification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received notification: %s", message)
-#         global_events = ["nodeJoin","nodeLeave",
-#              "quorumLoss", "quorumReached","quorumNodeLoss",
-#              "quorumNodeJoin","quorumNodeLeave"]
-#         if message["eventName"] in global_events:
-#             if self.node != envelope.From:
-#                 logging.debug("Discarding global event notification from %s",envelope.From)
-#                 return
-#         if message["eventName"] == "clusterManagerTakeOver":
-#             logging.info("Received clusterManagerTakeOver event from %s", envelope.From)
-#             old_cm = self.clusterInfo.aliases['system-manager']
-#             self.clusterInfo.aliases['system-manager'] = message['clusterManager']
-#             if self.node != message['clusterManager']:
-#                 logging.debug("Not the active system manager")
-#                 return
-#             if old_cm != message['clusterManager']:
-#                 # Stop services on old sysmgr, restart services on this node
-#                 # Ejecting the node from the cluster should provide most of what we need
-#                 # in order to prevent split-brain
-#                 try:
-#                     # Try to stop DB2 on the old CM
-#                     stopEnvelope = Stop('{}/DB21'.format(old_cm))
-#                     sendMessage(self.clusterInfo.getNodeAddress(old_cm), stopEnvelope)
-#                     gpfs.shutdown([old_cm])
-#
-#                     # Start DB2 on the new sysmgr
-# #                     startEnvelope = Start('system-manager/DB21')
-# #                     sendMessage(self.clusterInfo.getNodeAddress('system-manager'), startEnvelope)
-#
-#                     # Should we try to startup the old sysmgr?
-#                     gpfs.startup([old_cm])
-#                     # Other measures that may need to be taken
-#                 except:
-#                     pass
-#         self.logGPFSNotifications(message)
-#         logging.debug("Received notification %s", message)
-
-    def handleGPFSPreMountNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreMountNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSPreShutdownNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreShutdownNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSPreStartupNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreStartupNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSPreUnmountNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSPreUnmountNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSQuorumLossNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSQuorumLossNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSQuorumNodeJoinNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSQuorumNodeJoinNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSQuorumNodeLeaveNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSQuorumNodeLeaveNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSQuorumReachedNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSQuorumReachedNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSShutdownNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSShutdownNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSStartupNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSStartupNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
-
-    def handleGPFSUnmountNotification(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.GPFSUnmountNotification` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.critical("Received {0} notification: {1}".format(message["eventName"], message))
 
     def handleLocalStartDeviceManagerResponse(self, message, envelope):
         """
@@ -1359,53 +731,6 @@ class SystemManagerImplementation(object):
                 # addDevice will already log the error
                 pass
 
-    def handleRegisterDeviceManagerRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.RegisterDeviceManagerRequest` messages.
-        A message from the rest server to the active system manager to add one or more device managers.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Register device manager request from %s for %s on %s with type %s",
-                     envelope.From, message["devices"], message["nodes"], message["type"])
-
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received register device manager request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        # validate type
-        # assume that if the device manager exists on the active node, it exists on the thin nodes as well
-        type_found = False
-        deviceManagerImplementations = self.getDeviceManagerImplementations()
-        for implementation in deviceManagerImplementations:
-            existing_type = getFullModuleName(implementation) + "." +  implementation.__name__
-            if message["type"] == existing_type:
-                type_found = True
-                break
-        if not type_found:
-            return {"error": "Type " + message["type"] + " does not exist."}
-
-        # don't allow wildcard for device name
-        if "*" in message["devices"] or "" in message["devices"]:
-            return {"error": "Wildcard not allowed for device name when registering."}
-
-        # send register devices to each node with a list of devices to register
-        for node_name in node_list:
-            register_message = RegisterDeviceManager(node_name, message["devices"], message["type"])
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), register_message)
-
-        return {"response": "sent"}
-
     def handleRegistrationNotification(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.RegisterNode` messages
@@ -1488,96 +813,6 @@ class SystemManagerImplementation(object):
             response["error"] = "Received start message but current role is '{0}'".format(self.clusterInfo.role)
             log.error(response["error"])
             return response
-
-    def handleStartDeviceManagersRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.StartDeviceManagersRequest` messages.
-        A message from the rest server to the active system manager to start one or more device managers.
-        Changes device state from REGISTERED to RUNNING.
-
-        The message contains an attribute called names which is a list of device manager names to start.
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        :returns: Returns either a response sent message or an error message back to the REST server
-        """
-        log.info("Start device manager request from %s for %s on %s",
-                     envelope.From, message["names"], message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received start device manager request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        # FIXME: create separate StartNodeRequest
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configurationInfo = Configuration().toInfo()
-        try:
-            node_dict = self.getNodeDictFromDeviceList(message["names"], node_list,
-                                                       configurationInfo)
-        except Exception, e:
-            return {"error": str(e)}
-
-        # validate state
-        start_dict = {}
-        for node_name, device_dict in node_dict.iteritems():
-            for device_name in device_dict.keys():
-                device_state = device_dict[device_name].state
-                # already RUNNING, then do nothing
-                if device_state == States.RUNNING:
-                    # done with this device
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to start %s/%s because it is already started.",
-                                 node_name, device_name)
-                # convenience step - MAINTENANCE to RUNNING
-                elif device_state == States.MAINTENANCE:
-                    # add to start list
-                    if node_name in start_dict:
-                        device_dict2 = start_dict[node_name]
-                    else:
-                        device_dict2 = {}
-                        start_dict[node_name] = device_dict2
-                    device_dict2[device_name] = device_dict[device_name]
-                    # remove device from node dict
-                    del device_dict[device_name]
-                # else invalid state
-                elif device_state != States.REGISTERED:
-                    # remove device from node dict
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to start %s/%s because it has an invalid state of %s.  State should be %s.",
-                                 node_name, device_name, device_state.value, States.REGISTERED.value) # @UndefinedVariable
-
-        # enable all devices in MAINTENANCE and then set them to RUNNING later
-        for node_name, devices_dict in start_dict.iteritems():
-            # start later
-            start_message = StartDeviceManagers(node_name)
-            start_message.Message["devices"] = devices_dict
-            self.messageTracker.add(start_message)
-
-            # enable devices first
-            enable_message = EnableDeviceManager(node_name)
-            self.messageTracker.addRelatedMessage(start_message.MessageID, enable_message.MessageID)
-            enable_message.Message["devices"] = devices_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), enable_message)
-
-        # start all listed REGISTERED devices
-        for node_name, devices_dict in node_dict.iteritems():
-            # send start to each system manager
-            # with the DeviceInfo subset dict
-            start_message = StartDeviceManagers(node_name)
-            start_message.Message["devices"] = devices_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), start_message)
-
-        return {"response": "sent"}
 
     def handleStartDeviceManagersResponse(self, message, envelope):
         """
@@ -1850,72 +1085,6 @@ class SystemManagerImplementation(object):
             self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
             sendMessageToRouter("ipc://{0}.ipc".format(self.node), stopEnvelope)
 
-    def handleStopDeviceManagersRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.StopDeviceManagersRequest` messages.
-        A message from the rest server to the active system manager to stop one or more device managers.
-        Changes device state from RUNNING to REGISTERED.
-
-        The message contains an attribute called names which is a list of device manager names to stop.
-
-        The message contains an attribute called nodes which is a list of node names.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        :param disable: Defaults to False.  If True, sets device state from REGISTERED to DISABLED
-        :type disable: bool
-        :returns: Returns either a response sent message or an error message back to the REST server
-        """
-        log.info("Stop device manager request from %s for %s on %s",
-                     envelope.From, message["names"], message["nodes"])
-        # validate role
-        if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received stop device manager request from '%s' but current role is '%s', should be '%s'",
-                           envelope.From, self.clusterInfo.role, Roles.ACTIVE)
-            return
-
-        try:
-            node_list = self.validateNodeListAndTransformWildcards(message["nodes"])
-        except Exception, e:
-            return {"error": str(e)}
-
-        configurationInfo = Configuration().toInfo()
-        try:
-            node_dict = self.getNodeDictFromDeviceList(message["names"], node_list,
-                                                       configurationInfo)
-        except Exception, e:
-            return {"error": str(e)}
-
-        # validate state
-        for node_name, device_dict in node_dict.iteritems():
-            for device_name in device_dict.keys():
-                device_state = device_dict[device_name].state
-                # device is already REGISTERED, so its done.
-                # remove it from the list of devices to stop (i.e. node_dict)
-                if device_state == States.REGISTERED:
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to stop %s/%s because it is already stopped.",
-                                 node_name, device_name)
-                # this device has an invalid state
-                # remove it from the list of devices to stop (i.e. node_dict)
-                elif device_state != States.RUNNING:
-                    del device_dict[device_name]
-                    log.warn("Ignoring request to stop %s/%s because it has an invalid state of %s.  State should be %s.",
-                                 node_name, device_name, device_state.value, States.RUNNING.value) # @UndefinedVariable
-
-        for node_name, device_dict in node_dict.iteritems():
-            # if no devices for this node, then skip to next node
-            if len(device_dict) == 0:
-                continue
-            # send stop to each node with a list of devices to stop
-            stop_message = StopDeviceManagers(node_name)
-            stop_message.Message["devices"] = device_dict
-            sendMessage(self.clusterInfo.getNodeAddress(node_name), stop_message)
-
-        return {"response": "sent"}
-
     def handleStopDeviceManagersResponse(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.StopDeviceManager` response messages
@@ -2017,7 +1186,7 @@ class SystemManagerImplementation(object):
             log.error("Received stop node acknowlegdment from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
 
-    def handleUndeploydevicemanager(self, message, envelope):
+    def handleUndeployDeviceManager(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.UndeployDeviceManager` messages.
         A message from the rest server to the active system manager to delete the egg.  The system manager
@@ -2031,104 +1200,6 @@ class SystemManagerImplementation(object):
         """
         log.info("Undeploy device manager request from %s", envelope.From)
         self._handleUndeployEgg(message, envelope)
-
-    def handleUndeploypolicy(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.UndeployPolicy` messages.
-        A message from the rest server to the active system manager to delete the egg.  The system manager
-        will also tell other system managers to delete the egg.
-        Or a message from the active system manager to the other system managers to delete the egg.
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.info("Undeploy policy request from %s", envelope.From)
-        self._handleUndeployEgg(message, envelope)
-
-    def handleUnregisterDeviceManagersRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.UnregisterDeviceManagersRequest` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.debug("Received unregister device request from %s for %s on node(s) %s",
-                 envelope.From, message['devices'], message['nodes'])
-        try:
-            nodes_list = self.validateNodeListAndTransformWildcards(message['nodes'])
-        except Exception as e:
-            return {'error': 'Bad node name in request: {0}'.format(e)}
-
-        configurationInfo = Configuration().toInfo()
-        try:
-            node_dict = self.getNodeDictFromDeviceList(message["devices"], nodes_list, configurationInfo)
-        except Exception, e:
-            return {"error": str(e)}
-
-        self.messageTracker.add(envelope)
-        for node_name, device_dict in node_dict.iteritems():
-            devices_to_stop = dict((key, value) for (key, value) in device_dict.iteritems() if value == States.RUNNING)
-            devices_to_unregister = dict((key, value) for (key, value) in device_dict.iteritems() if value != States.RUNNING)
-
-            if devices_to_stop:
-                unregister_after_stop = LocalUnregisterDeviceManagers(node_name, devices_to_stop.keys())
-                self.messageTracker.addRelatedMessage(envelope.MessageID, unregister_after_stop.MessageID)
-                self.messageTracker.add(unregister_after_stop)
-                stop_env = StopDeviceManagers(node_name)
-                stop_env.Message['devices'] = devices_to_stop
-                self.messageTracker.addRelatedMessage(unregister_after_stop.MessageID, stop_env.MessageID)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), stop_env)
-            if devices_to_unregister:
-                unregister_message = LocalUnregisterDeviceManagers(node_name, devices_to_unregister.keys())
-                self.messageTracker.addRelatedMessage(envelope.MessageID, unregister_message.MessageID)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), unregister_message)
-
-        return {'response': 'sent'}
-
-    def handleUnregisterNodeRequest(self, message, envelope):
-        """
-        Handle :class:`~c4.system.messages.UnregisterNodeRequest` messages
-
-        :param message: message
-        :type message: dict
-        :param envelope: envelope
-        :type envelope: :class:`~c4.system.messages.Envelope`
-        """
-        log.debug("Received unregister node request from %s for %s",
-                 envelope.From, message['nodes'])
-        try:
-            nodes_list = self.validateNodeListAndTransformWildcards(message['nodes'])
-        except Exception as e:
-            return {'error': 'Bad node name in request: {0}'.format(e)}
-
-        configuration = Configuration()
-        self.messageTracker.add(envelope)
-        for n in nodes_list:
-            unregister_message = UnregisterNode(n)
-            self.messageTracker.addRelatedMessage(envelope.MessageID, unregister_message.MessageID)
-            configuration.changeTargetState(n, None, States.DEPLOYED)
-            state = configuration.getState(n)
-            if state == States.REGISTERED:
-                configuration.changeState(n, None, States.UNREGISTERING)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), unregister_message)
-            elif state == States.MAINTENANCE:
-                configuration.changeState(n, None, States.ENABLING)
-                enable_env = EnableNode(n)
-                self.messageTracker.add(unregister_message)
-                self.messageTracker.addRelatedMessage(unregister_message.MessageID, enable_env.MessageID)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), enable_env)
-            elif state == States.RUNNING:
-                configuration.changeState(n, None, States.STOPPING)
-                stop_env = StopNode(n)
-                self.messageTracker.add(unregister_message)
-                self.messageTracker.addRelatedMessage(unregister_message.MessageID, stop_env.MessageID)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), stop_env)
-
-        return {'response': 'sent'}
 
     def handleUnregisterNode(self, message, envelope):
         """
@@ -2148,7 +1219,7 @@ class SystemManagerImplementation(object):
 
     def handleUnregisterNodeResponse(self, message, envelope):
         """
-        Handle :class:`~c4.system.messages.Unregister` response
+        Handle :class:`~c4.system.messages.UnregisterNode` response
 
         :param message: message
         :type message: dict
@@ -2167,40 +1238,6 @@ class SystemManagerImplementation(object):
         configuration.removeNode(envelope.From)
         if envelope.From == self.node:
             self.stopFlag.set()
-
-    def logGPFSNotifications(self, message):
-        """
-        Log GPFS Notifications
-
-        :param message: message
-        :type message: dict
-        """
-
-        components = ['diskName','fsName','filesetName','storagePool','eventNode','clusterManager']
-        info = ['reason','filesetSize','quorumNodes','filesetLimit','filesetQuota', "myNode"]
-        log_time = message["time"]
-        event = message["eventName"]
-        eventComponent = ""
-        msg = ""
-        for comp in components:
-            if comp in message:
-                if eventComponent == "":
-                    eventComponent += comp + ":" + message[comp]
-                else:
-                    eventComponent += ' ' + comp + ":" + message[comp]
-        for i in info:
-            if i in message:
-                if msg == "":
-                    msg += i + ":" + message[i]
-                else:
-                    msg += ' ' + i + ":" + message[i]
-        text = log_time + ' [' + event + '] ' + eventComponent
-        if msg:
-            text += " " + msg
-        try:
-            exclusiveWrite("/head/logs/callback_logs", text+"\n")
-        except:
-            logging.debug("Can't write to callback log, probably no longer the active master")
 
     @classmethod
     def parseFrom(cls, from_str):
@@ -2296,30 +1333,6 @@ class SystemManagerImplementation(object):
                 }}
                 self.messageTracker.updateMessageContent(messageId, content)
 
-    def startPolicyEngineTimer(self):
-        """
-        Start the policy engine timer.
-
-        For example, initial system manager startup.
-
-        For example, after the policy engine is modified like enable/disable.
-        """
-        configuration = Configuration()
-        self.processes["policyEngineTimer"] = Timer("{}-PolicyEngineTimer".format(self.node),
-                                 self.executePolicyEngine, 5, -1,
-                                 configuration.getPlatform().settings.get("policy_timer_interval", 5000)/1000)
-        self.processes["policyEngineTimer"].start()
-
-    def startAlertManagerTimer(self):
-        """
-        Start the WTi alert manager timer.
-        """
-        configuration = Configuration()
-        self.processes["alertManagerTimer"] = Timer("{}-AlertManagerTimer".format(self.node),
-                                 self.executeAlertManager, 5, -1,
-                                 configuration.getPlatform().settings.get("alert_manager_timer_interval", 10000)/1000)
-        self.processes["alertManagerTimer"].start()
-
     def stop(self):
         """
         Stop system manager implementation
@@ -2329,24 +1342,6 @@ class SystemManagerImplementation(object):
             process.terminate()
             process.join()
             self.log.info("stopped %s", name)
-
-    def stopPolicyEngineTimer(self):
-        """
-        Stop the policy engine timer
-
-        For example, after the policy engine is modified like enable/disable.
-        """
-        if "policyEngineTimer" in self.processes:
-            self.processes["policyEngineTimer"].terminate()
-            self.processes["policyEngineTimer"].join()
-
-    def stopAlertManagerTimer(self):
-        """
-        Stop the WTi alert manager.
-        """
-        if "alertManagerTimer" in self.processes:
-            self.processes["alertManagerTimer"].terminate()
-            self.processes["alertManagerTimer"].join()
 
     def validateNodeListAndTransformWildcards(self, node_list):
         """
@@ -2384,7 +1379,6 @@ def main():
     parser.add_argument("-n", "--node", action="store", help="Node name for this system manager.  Must match a node in the bill of materials (i.e. bom.json).")
     parser.add_argument("-p", "--port", action="store", help="The port to use for routing of messages")
     parser.add_argument("-b", "--bom", action="store", help="BOM file name")
-    parser.add_argument("-g","--gpfs", dest="gpfs", action="store_true", help="Specifies that GPFS is being used")
     parser.add_argument("-f", "--force", action="store_true", help="Loads from the configuration file, regardless of whether the configuration tables are empty or not.")
     parser.set_defaults(node=platformSpec.node(),
                         port="5000",
@@ -2401,14 +1395,9 @@ def main():
     # then we are a thin system manager
     if args.sm_addr:
         log.info("System manager information provided. Continuing as a thin node")
-        if args.gpfs:
-            clusterInfo = GPFSClusterInfo(args.node,
-                                        "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.port),
-                                        args.sm_addr, Roles.THIN)
-        else:
-            clusterInfo = DBClusterInfo(args.node,
-                            "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.port),
-                            args.sm_addr, Roles.THIN)
+        clusterInfo = DBClusterInfo(args.node,
+                        "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.port),
+                        args.sm_addr, Roles.THIN)
     # load configuration from the database
     # if empty, then load from bom.json
     elif args.bom:
@@ -2428,56 +1417,30 @@ def main():
             # validate node (hostname) matches configuration
             if args.node not in configuration.getNodeNames():
                 log.error("Current node name (%s) not found in configuration" % args.node)
-                sys.exit(1)
+                return 1
 
-            if args.gpfs:
-                clusterInfo = GPFSClusterInfo(args.node,
-                                              configuration.getAddress(args.node),
-                                              configuration.getAddress("system-manager"),
-                                              configuration.getNode(args.node, includeDevices=False).role)
-            else:
-                clusterInfo = DBClusterInfo(args.node,
-                                            configuration.getAddress(args.node),
-                                            configuration.getAddress("system-manager"),
-                                            configuration.getNode(args.node, includeDevices=False).role)
-
-            # verify ssl certificate and key file exists
-            platform = configuration.getPlatform()
-            ssl_enabled = platform.settings.get("ssl_enabled", True)
-            if ssl_enabled:
-                ssl_certificate_file = SystemManagerImplementation.getSSLCertificateFile(platform)
-                if not os.path.isfile(ssl_certificate_file):
-                    log.error("SSL certificate file does not exist: %s", ssl_certificate_file)
-                    sys.exit(1)
-                ssl_key_file = SystemManagerImplementation.getSSLKeyFile(platform)
-                if not os.path.isfile(ssl_key_file):
-                    log.error("SSL key file does not exist: %s", ssl_key_file)
-                    sys.exit(1)
+            clusterInfo = DBClusterInfo(args.node,
+                                        configuration.getAddress(args.node),
+                                        configuration.getAddress("system-manager"),
+                                        configuration.getNode(args.node, includeDevices=False).role)
 
         except Exception, e:
             log.error("Error in %s", args.bom)
             log.error(e)
-            sys.exit(1)
+            return 1
     # will never get here
     else:
         log.error("Please provide either a configuration file or the address of the active system manager")
-        sys.exit(1)
+        return 1
 
-    # Note the port we're using for zmq messages
-    if args.gpfs:
-        try:
-            exclusiveWrite("/tmp/port_for_zeromq", args.port, append=False)
-        except Exception as e:
-            log.error("Could not write port to /tmp/port_for_zeromq")
-            log.error(e)
-            sys.exit(1)
     # start system manager
     try:
         systemManager = SystemManager(args.node, clusterInfo)
+        systemManager.run()
+        return 0
     except MessagingException as e:
         log.error("Could not set up System Manager: %s", e)
-    else:
-        systemManager.run()
+        return 1
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

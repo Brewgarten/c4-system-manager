@@ -2,9 +2,6 @@ import ctypes
 import logging
 import multiprocessing
 import json
-import gpfs
-import sqlite3
-import traceback
 
 from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable
@@ -54,13 +51,8 @@ class States(Enum):
 
     STARTING = "starting"
     STOPPING = "stopping"
-    STOPPED = "stopped"
-    DOWN = "down"
 
     RUNNING = "running"
-    FAILED = "failed"
-
-    UNKNOWN = "unknown"
 
 @ClassLogger
 class Configuration():
@@ -69,11 +61,6 @@ class Configuration():
     """
     def __init__(self):
         self.database = DBManager()
-
-    @staticmethod
-    def _dbGetRole(details):
-        nodeDetails = json.loads(details)
-        return nodeDetails.get('role')
 
     def addAlias(self, alias, node):
         """
@@ -111,9 +98,9 @@ class Configuration():
         :param fullDeviceName: fully qualified device name
         :type fullDeviceName: str
         :param device: device
-        :type device: :class:`~dynamite.system.configuration.DeviceInfo`
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
         :returns: device info with database ids
-        :rtype: :class:`~dynamite.system.configuration.DeviceInfo`
+        :rtype: :class:`~c4.system.configuration.DeviceInfo`
 
         """
         nodeInfo = self.getNode(node)
@@ -164,9 +151,9 @@ class Configuration():
         Add node
 
         :param node: node
-        :type node: :class:`~dynamite.system.configuration.NodeInfo`
+        :type node: :class:`~c4.system.configuration.NodeInfo`
         :returns: node info with database ids
-        :rtype: :class:`~dynamite.system.configuration.NodeInfo`
+        :rtype: :class:`~c4.system.configuration.NodeInfo`
         """
         nodeInfo = self.getNode(node.name, includeDevices=False)
         if nodeInfo:
@@ -176,7 +163,7 @@ class Configuration():
         self.database.writeCommit("""
             insert into t_sm_configuration (name, state, type, details)
             values (?, ?, ?, ?)""",
-            (node.name, node.state.name, "dynamite.system.manager.SystemManager", json.dumps(node.details)))
+            (node.name, node.state.name, "c4.system.manager.SystemManager", json.dumps(node.details)))
         nodeInfo = self.getNode(node.name, includeDevices=False)
 
         # save child devices
@@ -193,7 +180,7 @@ class Configuration():
         Add platform information
 
         :param platform: platform
-        :type platform: :class:`~dynamite.system.configuration.PlatformInfo`
+        :type platform: :class:`~c4.system.configuration.PlatformInfo`
         """
         self.database.write("begin")
         self.database.write("delete from t_sm_platform")
@@ -202,29 +189,19 @@ class Configuration():
             ("name", platform.name),
             ("type", platform.type),
             ("description", platform.description),
-            ("settings", json.dumps(platform.settings)),
-            ("storage", json.dumps(platform.storage))
+            ("settings", json.dumps(platform.settings))
         )
         self.database.write("commit")
 
-    def clear(self, node=None):
+    def clear(self):
         """
-        Removes all nodes and devices from the configuration object and the database
-        if no node is Give, else clears information only for that node
+        Removes all nodes and devices from the configuration object and the database.
         """
-        if node:
-            with self.database.connection as txn:
-                node = self.getNode(node, True, True)
-                if node is not None:
-                    ids = [node.id] + [node.devices[d].id for d in node.devices]
-                    binding = ','.join('?' * len(ids))
-                    self.database.write("delete from t_sm_configuration where id in ({0})".format(binding), ids)
-        else:
-            self.database.write("begin")
-            self.database.write("delete from t_sm_configuration")
-            self.database.write("delete from t_sm_configuration_alias")
-            self.database.write("delete from t_sm_platform")
-            self.database.write("commit")
+        self.database.write("begin")
+        self.database.write("delete from t_sm_configuration")
+        self.database.write("delete from t_sm_configuration_alias")
+        self.database.write("delete from t_sm_platform")
+        self.database.write("commit")
 
     def changeAlias(self, alias, node):
         """
@@ -379,32 +356,6 @@ class Configuration():
             return None
         return States.valueOf(stateName)
 
-    def getNodeByRole(self, *roles):
-        ret = []
-        for node in self.getNodeNames():
-            node = self.getNode(node, includeDevices=False)
-            if node and (not roles or node.role in roles):
-                ret.append(node)
-
-        return ret
-
-    @property
-    def systemManagerNode(self):
-        nodes = self.getNodeByRole(Roles.ACTIVE)
-        if len(nodes) > 1:
-            self.log.error("%d nodes with role ACTIVE : %s", len(nodes), nodes)
-        elif len(nodes) == 0:
-            self.log.warning("No nodes with ACTIVE role")
-        else:
-            return nodes[0]
-
-        return None
-
-    @property
-    def systemManagerAddress(self):
-        node = self.systemManagerNode
-        return node.address if node is not None else None
-
     def getAddress(self, node):
         """
         Given a node name or node alias,
@@ -416,8 +367,22 @@ class Configuration():
         :returns: node address
         :rtype str
         """
-        info = self.systemManagerNode if node == 'system-manager' else self.getNode(node, includeDevices=False)
-        return info.address if info is not None else None
+        info = self.getNode(node, includeDevices=False)
+
+        if info is not None:
+            return info.address
+
+        # try to use the alias
+        nodeName = self.resolveAlias(node)
+        if nodeName is None:
+            self.log.error("could not get address because node '%s' does not exist", node)
+            return None
+
+        info =  self.getNode(nodeName, includeDevices=False)
+        if info is None:
+            self.log.error("could not get address because node for alias '%s' does not exist", nodeName)
+            return None
+        return info.address
 
     def getAliases(self):
         """
@@ -427,11 +392,7 @@ class Configuration():
         :rtype: dict
         """
         rows = self.database.query("select alias, node_name from t_sm_configuration_alias")
-        d = {row["alias"]: row["node_name"] for row in rows}
-        if 'system-manager' in d:
-            sm = self.getSystemManagerNodeName()
-            d['system-manager'] = sm
-        return d
+        return {row["alias"]: row["node_name"] for row in rows}
 
     def getDetail(self, node, name, detail):
         """
@@ -480,7 +441,7 @@ class Configuration():
         :param fullDeviceName: fully qualified device name
         :type fullDeviceName: str
         :returns: device info
-        :rtype: :class:`~dynamite.system.configuration.DeviceInfo`
+        :rtype: :class:`~c4.system.configuration.DeviceInfo`
         """
         nodeInfo = self.getNode(node)
         if nodeInfo is None:
@@ -521,18 +482,17 @@ class Configuration():
         Get platform information
 
         :returns: platform
-        :rtype: :class:`~dynamite.system.configuration.PlatformInfo`
+        :rtype: :class:`~c4.system.configuration.PlatformInfo`
         """
         rows = self.database.query("select property, value from t_sm_platform")
         data = {}
         for row in rows:
             data[row["property"]] = row["value"]
         return PlatformInfo(
-            name=data.get("name", "unknown"),
-            platformType=data.get("type", "dynamite.system.platforms.Unknown"),
-            description=data.get("description", ""),
-            settings=json.loads(data.get("settings", "{}")),
-            storage=json.loads(data.get("storage", "{}"))
+            data.get("name", "unknown"),
+            data.get("type", "c4.system.platforms.Unknown"),
+            data.get("description", ""),
+            json.loads(data.get("settings", "{}"))
         )
 
     def getRole(self, node):
@@ -559,7 +519,7 @@ class Configuration():
         :type node: str
         :param name: device manager name
         :type name: str
-        :returns: :class:`~dynamite.system.configuration.States`
+        :returns: :class:`~c4.system.configuration.States`
         """
         if name:
             info = self.getDevice(node, name)
@@ -578,8 +538,7 @@ class Configuration():
         :returns: node name
         :rtype: str
         """
-        node = self.systemManagerNode
-        return node.name if node is not None else None
+        return self.resolveAlias("system-manager")
 
     def getTargetState(self, node, name=None):
         """
@@ -589,21 +548,12 @@ class Configuration():
         :type node: str
         :param name: device manager name
         :type name: str
-        :returns: :class:`~dynamite.system.configuration.States`
+        :returns: :class:`~c4.system.configuration.States`
         """
         state = self.getDetail(node, name, "targetState");
         if state is None:
             return None
         return States.valueOf(state)
-
-    def _createNodeInfo(self, nodeRow):
-        nodeDetailsJSON = nodeRow["details"]
-        nodeDetails = json.loads(nodeDetailsJSON)
-        nodeRole = Roles.valueOf(nodeDetails["role"])
-        nodeState = States.valueOf(nodeRow["state"])
-        nodeInfo = NodeInfo(nodeRow["name"], nodeDetails["address"], nodeRole, nodeState, nodeRow["id"])
-        nodeInfo.details = nodeDetails
-        return nodeInfo
 
     def getNode(self, node, includeDevices=True, flatDeviceHierarchy=False):
         """
@@ -616,7 +566,7 @@ class Configuration():
         :param flatDeviceHierarchy: flatten device hierarchy
         :type flatDeviceHierarchy: bool
         :returns: node
-        :rtype: :class:`~dynamite.system.configuration.NodeInfo`
+        :rtype: :class:`~c4.system.configuration.NodeInfo`
         """
         try:
             if includeDevices:
@@ -642,7 +592,12 @@ class Configuration():
 
             # deal with node information
             nodeRow = rows.pop(0)
-            nodeInfo = self._createNodeInfo(nodeRow)
+            nodeDetailsJSON = nodeRow["details"]
+            nodeDetails = json.loads(nodeDetailsJSON)
+            nodeRole = Roles.valueOf(nodeDetails["role"])
+            nodeState = States.valueOf(nodeRow["state"])
+            nodeInfo = NodeInfo(nodeRow["name"], nodeDetails["address"], nodeRole, nodeState, nodeRow["id"])
+            nodeInfo.details = nodeDetails
 
             if rows:
 
@@ -703,7 +658,7 @@ class Configuration():
         Load configuration from the specified configuration information.
 
         :param configurationInfo: configuration information
-        :type configurationInfo: :class:`~dynamite.system.configuration.ConfigurationInfo`
+        :type configurationInfo: :class:`~c4.system.configuration.ConfigurationInfo`
         :raises: :class:`ConfigurationValidationError` raised when validation fails.
         """
         configurationInfo.validate()
@@ -766,14 +721,14 @@ class Configuration():
         rowIds = [(nodeInfo.id,)]
         rowIds.extend([(device.id,) for device in nodeInfo.devices.values()])
         rowIds = sorted(rowIds)
-
-        # removing node and its alias should be in a single transaction
         self.database.writeMany("""
             delete from t_sm_configuration where id is ?""",
             *rowIds)
 
         # remove aliases for node
-        self.removeAlias(node=node)
+        self.database.writeCommit("""
+            delete from t_sm_configuration_alias where node_name=?""",
+            (node,))
 
     def removeTargetState(self, node, name=None):
         """
@@ -799,41 +754,6 @@ class Configuration():
             and state is not 'UNDEPLOYED'""",
             (States.REGISTERED.name,))
 
-    def resetNodes(self):
-        """
-        Reset the roles of all nodes in the database. This is typically useful
-        for starting system
-        """
-        for node in self.getNodeNames():
-            if self.getRole(node) == Roles.ACTIVE:
-                self.changeRole(node, Roles.PASSIVE)
-            self.changeState(node, None, States.MAINTENANCE)
-
-        self.resetDeviceStates()
-
-    def removeAlias(self, alias=None, node=None):
-        """
-        Remove the specified alias mapping. If none is specified, then remove
-        all aliases
-
-        :param str alias: the alias
-        :param str node: the node name
-        """
-        # remove aliases for node
-        where = []
-        param = []
-        if alias:
-            where.append("alias=?")
-            param.append(alias)
-        if node:
-            where.append("node_name=?")
-            param.append(node)
-
-        where = ("where " + " and ".join(where)) if where else ""
-        query = "delete from t_sm_configuration_alias {0}".format(where)
-
-        self.database.writeCommit(query, tuple(param))
-
     def resolveAlias(self, alias):
         """
         Get node name for the specified alias
@@ -857,7 +777,7 @@ class Configuration():
         Convert the information stored in the configuration into an info object
 
         :returns: configuration information
-        :rtype: :class:`~dynamite.system.configuration.ConfigurationInfo`
+        :rtype: :class:`~c4.system.configuration.ConfigurationInfo`
         """
         configurationInfo = ConfigurationInfo()
         configurationInfo.aliases = self.getAliases()
@@ -890,6 +810,10 @@ class ConfigurationInfo(JSONSerializable):
                 raise ConfigurationNameMismatchError(name, node.name)
             self.validateName(node)
 
+        # make sure system-manager alias exists
+        if "system-manager" not in self.aliases:
+            raise ConfigurationMissingSystemManagerAliasError()
+
         # make sure the node that the alias points to exists
         for alias, nodeName in self.aliases.iteritems():
             if nodeName not in self.nodes:
@@ -907,7 +831,7 @@ class ConfigurationInfo(JSONSerializable):
         Validate that mapping key name matches info name
 
         :param node: info
-        :type node: :class:`~dynamite.system.configuration.DeviceInfo` or :class:`~dynamite.system.configuration.NodeInfo`
+        :type node: :class:`~c4.system.configuration.DeviceInfo` or :class:`~c4.system.configuration.NodeInfo`
         :raises: :class:`ConfigurationValidationError` raised when validation fails.
         """
         for name, childInfo in info.devices.iteritems():
@@ -985,112 +909,7 @@ class DBClusterInfo(object):
     :type node: str
     :param address: address of the node
     :type address: str
-    """
-    def __init__(self, node, address):
-        super(DBClusterInfo, self).__init__()
-        self.node = node
-        self.address = address
-
-    @property
-    def aliases(self):
-        """
-        Alias mappings
-        """
-        return Configuration().getAliases()
-
-    @aliases.setter
-    def aliases(self, value):
-        raise AttributeError, "Attribute aliases is read-only"
-
-    def getNodeAddress(self, node):
-        """
-        Get address for specified node
-
-        :param node: node
-        :type node: str
-        :returns: str or ``None`` if not found
-        """
-        # Configuration.getAddress does resolve 'system-manager' to the correct address
-        # if one is known
-        address = Configuration().getAddress(node)
-        if not address and node == self.node:
-            address = self.address
-        return address
-
-    @property
-    def nodeNames(self):
-        """
-        Names of the nodes in the cluster
-        """
-        return Configuration().getNodeNames()
-
-    @nodeNames.setter
-    def nodeNames(self, value):
-        raise AttributeError, "Attribute nodeNames is read-only"
-
-    @property
-    def role(self):
-        """
-        Node role
-        """
-        return Configuration().getRole(self.node)
-
-    @role.setter
-    def role(self, role):
-        if isinstance(role, Roles):
-            Configuration().changeRole(self.node, role)
-        else:
-            self.log.error("'%s' does not match enum of type '%s'", role, Roles)
-
-    @property
-    def state(self):
-        """
-        Node state
-        """
-        return Configuration().getState(self.node)
-
-    @state.setter
-    def state(self, state):
-        if isinstance(state, States):
-            Configuration().changeState(self.node, None, state)
-        else:
-            self.log.error("'%s' does not match enum of type '%s'", state, States)
-
-    @property
-    def systemManagerAddress(self):
-        """
-        Active system manager address
-        """
-        return Configuration().systemManagerAddress
-
-    @property
-    def systemManagerNodeName(self):
-        """
-        Active system manager node name
-        """
-        return Configuration().getSystemManagerNodeName()
-
-    # ClusterInfo shouldn't allow updates to systemManager, that would be done
-    # by the application by changing the role to ACTIVE in SMDB
-
-    @systemManagerAddress.setter
-    def systemManagerAddress(self, value):
-        raise AttributeError, "Attribute systemManagerAddress is read-only"
-
-    @systemManagerNodeName.setter
-    def systemManagerNodeName(self, value):
-        raise AttributeError, "Attribute systemManagerNode is read-only"
-
-@ClassLogger
-class GPFSClusterInfo(DBClusterInfo):
-    """
-    A basic cluster information object backed by the database depending on the node role
-
-    :param node: node
-    :type node: str
-    :param address: address of the node
-    :type address: str
-    :param systemManagerAddress: address of the system manager
+    :param systemManagerAddress: address of the active system manager
     :type systemManagerAddress: str
     :param role: role of the node
     :type role: :class:`Roles`
@@ -1111,44 +930,37 @@ class GPFSClusterInfo(DBClusterInfo):
         Alias mappings
         """
         if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-
-            database = DBManager()
-            rows = database.query("select alias, node_name from t_sm_configuration_alias")
-            return {row[0]: row[1] for row in rows}
+            return Configuration().getAliases()
         else:
             return {"system-manager": "system-manager"}
 
-    @property
-    def GPFSrole(self):
+    def getNodeAddress(self, node):
         """
-        GPFS Node Role
-        :returns: str or ``None`` if no node role
-        """
-        node_info = gpfs.getNodes()[self.node]
-        if node_info.manager and node_info.quorum:
-            return GPFSRoles.QUORUM_MANAGER
-        elif node_info.manager:
-            return GPFSRoles.MANAGER
-        elif node_info.quorum:
-            return GPFSRoles.QUORUM
-        else:
-            return GPFSRoles.CLIENT
+        Get address for specified node
 
-    @GPFSrole.setter
-    def GPFSrole(self, gpfsrole):
+        :param node: node
+        :type node: str
+        :returns: str or ``None`` if not found
         """
-        Sets GPFS node role
-        :param gpfsroles: the role to assign to the node
-        :type gpfsroles: :py:class:~`dynamite.system.configuration.GPFSRoles`
-        """
-        if isinstance(gpfsrole, GPFSRoles):
-            if gpfsrole == GPFSRoles.QUORUM_MANAGER:
-                gpfs.changeNode(self.node, {'--quorum':'', '--manager':''})
-            else:
-                role_string = "--{0}".format(gpfsrole.value)
-                gpfs.changeNode(self.node, {role_string:''})
+        if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
+            return Configuration().getAddress(node)
         else:
-            logging.error("'%s' does not match enum of type '%s'", gpfsrole, GPFSRoles)
+            if node == "system-manager":
+                return self._systemManagerAddress.value
+            elif node == self.node:
+                return self.address
+            else:
+                return None
+
+    @property
+    def nodeNames(self):
+        """
+        Names of the nodes in the cluster
+        """
+        if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
+            return Configuration().getNodeNames()
+        else:
+            return [self.node, "system-manager"]
 
     @property
     def role(self):
@@ -1180,61 +992,17 @@ class GPFSClusterInfo(DBClusterInfo):
         else:
             self.log.error("'%s' does not match enum of type '%s'", state, States)
 
-    def getNodeAddress(self, node):
-        """
-        Get address for specified node
-
-        :param node: node
-        :type node: str
-        :returns: str or ``None`` if not found
-        """
-        if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-
-            database = DBManager()
-            if node == "system-manager":
-                rows = database.query("select node_name from t_sm_configuration_alias where alias is ?", ("system-manager",))
-                if rows:
-                    node = rows[0][0]
-                else:
-                    return None
-
-            rows = database.query("select details from t_sm_configuration where name is ?", (node,))
-            if rows:
-                return json.loads(rows[0][0])["address"]
-            else:
-                return None
-        else:
-            if node == "system-manager":
-                return self._systemManagerAddress.value
-            elif node == self.node:
-                return self.address
-            else:
-                return None
-
     @property
-    def nodeAddresses(self):
+    def systemManagerAddress(self):
         """
-        Addressess of the nodes in the cluster
+        Active system manager address
         """
-        if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-            database = DBManager()
-            rows = database.query("select details from t_sm_configuration where parent_id is null")
-            return [json.loads(row[0])["address"] for row in rows]
-        else:
-            return [self.address, self._systemManagerAddress.value]
+        return self._systemManagerAddress.value
 
-    @property
-    def nodeNames(self):
-        """
-        Names of the nodes in the cluster
-        """
-        if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-            database = DBManager()
-            rows = database.query("select name from t_sm_configuration where parent_id is null")
-            return [row[0] for row in rows]
-        else:
-#            return [node.name for node in gpfs.getNodes()]
-            return [self.node, "system-manager"]
+    @systemManagerAddress.setter
+    def systemManagerAddress(self, address):
+        with self._systemManagerAddress.get_lock():
+            self._systemManagerAddress.value = address
 
 class DeviceInfo(JSONSerializable):
     """
@@ -1245,7 +1013,7 @@ class DeviceInfo(JSONSerializable):
     :param deviceType: type
     :type deviceType: str
     :param state: state
-    :type state: :class:`~dynamite.system.configuration.States`
+    :type state: :class:`~c4.system.configuration.States`
     :param deviceId: database id
     :type deviceId: int
     :param parentId: parent database id
@@ -1280,8 +1048,8 @@ class DeviceInfo(JSONSerializable):
         Add child device to the device
 
         :param device: device
-        :type device: :class:`~dynamite.system.configuration.DeviceInfo`
-        :returns: :class:`~dynamite.system.configuration.DeviceInfo`
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
+        :returns: :class:`~c4.system.configuration.DeviceInfo`
         """
         if device.name in self.devices:
             log.error("'%s' already part of '%s'", device.name, self.name)
@@ -1335,9 +1103,9 @@ class NodeInfo(JSONSerializable):
     :param address: address
     :type address: str
     :param role: role
-    :type role: :class:`~dynamite.system.configuration.Roles`
+    :type role: :class:`~c4.system.configuration.Roles`
     :param state: state
-    :type state: :class:`~dynamite.system.configuration.States`
+    :type state: :class:`~c4.system.configuration.States`
     :param nodeId: database id
     :type nodeId: int
     """
@@ -1363,10 +1131,6 @@ class NodeInfo(JSONSerializable):
     def __ne__(self, other):
         return not self.__eq__(other)
 
-    def __str__(self):
-        return '%s(%s, %s, %s)' % (self.name, self.role.name, self.state.name, self.address)
-    __repr__ = __str__
-
     @property
     def address(self):
         return self.details["address"]
@@ -1380,8 +1144,8 @@ class NodeInfo(JSONSerializable):
         Add device to the node
 
         :param device: device
-        :type device: :class:`~dynamite.system.configuration.DeviceInfo`
-        :returns: :class:`~dynamite.system.configuration.NodeInfo`
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
+        :returns: :class:`~c4.system.configuration.NodeInfo`
         """
         if device.name in self.devices:
             log.error("'%s' already part of '%s'", device.name, self.name)
@@ -1449,22 +1213,18 @@ class PlatformInfo(JSONSerializable):
     :type description: str
     :param settings: settings
     :type settings: dict
-    :param storage: storage
-    :type storage: dict
     """
-    def __init__(self, name="unknown", platformType="dynamite.system.platforms.Unknown", description="", settings=None, storage=None):
+    def __init__(self, name="unknown", platformType="c4.system.platforms.Unknown", description="", settings=None):
         self.name = name
         self.type = platformType
         self.description = description
         self.settings = settings or {}
-        self.storage = storage or {}
 
     def __eq__(self, other):
         if (isinstance(other, PlatformInfo)
             and self.name == other.name
             and self.description == other.description
             and self.settings == other.settings
-            and self.storage == other.storage
             and self.type == other.type):
             return True
         return False

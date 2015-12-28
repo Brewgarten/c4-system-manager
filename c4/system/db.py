@@ -26,7 +26,7 @@ class DBManager(object):
         """
         Connects to the database.  If the database does not exist we check backup files
         and if there is a backup we automatically restore the latest, if not then a new
-        database will be created with the schema file that is in the dynamite.data directory.
+        database will be created with the schema file that is in the c4.data directory.
 
         :param dbName: name of the database.  Defaults to sysmgr.db
         :type dbName: str
@@ -75,7 +75,7 @@ class DBManager(object):
                 cls.log.error("Error creating database: %s.  Already exists.", fullDBName)
                 return False
         # the schema file is in the data dir
-        schema = pkg_resources.resource_string("dynamite.data", "sql/sysmgr.sql")  # @UndefinedVariable
+        schema = pkg_resources.resource_string("c4.data", "sql/sysmgr.sql")  # @UndefinedVariable
         # create the database
         connection = sqlite3.connect(fullDBName)
         cursor = connection.cursor()
