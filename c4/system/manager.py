@@ -11,8 +11,10 @@ import time
 
 import pkg_resources
 
-from c4.messaging import (MessageTracker, MessagingException, PeerRouter,
-                          callMessageHandler, sendMessage, sendMessageToRouter)
+from c4.messaging import (MessageTracker, MessagingException,
+                          PeerRouter,
+                          RouterClient,
+                          callMessageHandler)
 from c4.system import db, egg
 from c4.system.configuration import (DBClusterInfo, Configuration, NodeInfo,
                                      States, Roles, ConfigurationInfo)
@@ -26,11 +28,10 @@ from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import (Timer, disableInterruptSignal,
                            getFullModuleName, getModuleClasses)
-
-# TODO: check what this is used for
 import platform as platformSpec
 
 
+# TODO: check what this is used for
 log = logging.getLogger(__name__)
 
 @ClassLogger
@@ -47,7 +48,7 @@ class SystemManager(PeerRouter):
     :raises MessagingException: if either external or internal system manager address is already in use
     """
     def __init__(self, node, clusterInfo, name="SM"):
-        super(SystemManager, self).__init__(node, clusterInfo, "ipc://{}.ipc".format(node), name=name)
+        super(SystemManager, self).__init__(node, clusterInfo, name=name)
 
         # FIXME: check which ones need/may to be moved to implementation
         # FIXME: which ones need to stay shared?
@@ -83,7 +84,8 @@ class SystemManager(PeerRouter):
 
         # stop local device managers, this is required, otherwise device manager processes won't stop
         if self.clusterInfo.state == States.RUNNING:
-            sendMessageToRouter("ipc://{0}.ipc".format(self.implementation.node), StopNode(self.implementation.node))
+            client = RouterClient(self.implementation.node)
+            client.forwardMessage(StopNode(self.implementation.node))
 
             # give device managers and sub processes time to stop
             while self.clusterInfo.state == States.RUNNING:
@@ -124,8 +126,20 @@ class SystemManagerImplementation(object):
         self.sharedLock.release()
         self.messageTracker = messageTracker
         self.stopFlag = None
+        # system manager router client
+        self._client = None
 
         self.processes ={}
+
+    @property
+    def client(self):
+        """
+        System manager router client
+        """
+        # TODO: determine if there is a better way to share the client, the problem is that during init the actual system manager router address is not set up
+        if self._client is None:
+            self._client = RouterClient(self.node)
+        return self._client
 
     def _handleDeployEgg(self, message, envelope):
         """
@@ -226,13 +240,13 @@ class SystemManagerImplementation(object):
         """
         if self.clusterInfo.state == States.DEPLOYED or self.clusterInfo.state == States.REGISTERING:
             self.clusterInfo.state = States.REGISTERING
-            env =  RegistrationNotification(self.node)
+            envelope =  RegistrationNotification(self.node)
             node_info = NodeInfo(self.node, self.clusterInfo.getNodeAddress(self.node),
                                  self.clusterInfo.role, self.clusterInfo.state)
             # TODO: have it automatically serialize
-            env.Message['NodeInfo'] = node_info.toJSONSerializable(includeClassInfo=True)
-            env.Message['version'] = c4.system.__version__
-            sendMessageToRouter("ipc://{0}.ipc".format(self.node), env)
+            envelope.Message['NodeInfo'] = node_info.toJSONSerializable(includeClassInfo=True)
+            envelope.Message['version'] = c4.system.__version__
+            self.client.forwardMessage(envelope)
 
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
@@ -467,7 +481,7 @@ class SystemManagerImplementation(object):
                 # the original_message came from handleStartdevicemanager
                 if type(original_message) == StartDeviceManagers:
                     log.debug("Sending original start message: %s to %s", original_message.Message, original_message.To)
-                    sendMessage(self.clusterInfo.getNodeAddress(envelope.From), original_message)
+                    self.client.forwardMessage(original_message)
 
     def handleEnableNode(self, message, envelope):
         """
@@ -534,7 +548,7 @@ class SystemManagerImplementation(object):
             # last related message, so pick up the stored message and send it out
             storedMessageEnvelope = self.messageTracker.remove(storedMessageId)
             if storedMessageEnvelope is not None:
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), storedMessageEnvelope)
+                self.client.forwardMessage(storedMessageEnvelope)
 
     def handleLocalStopDeviceManagerResponse(self, message, envelope):
         """
@@ -572,8 +586,7 @@ class SystemManagerImplementation(object):
             # last related message, so pick up the original message and respond to it
             originalMessageEnvelope = self.messageTracker.remove(originalMessageId)
             if originalMessageEnvelope is not None:
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node),
-                                    originalMessageEnvelope.toResponse(originalMessageEnvelope.Message))
+                self.client.forwardMessage(originalMessageEnvelope.toResponse(originalMessageEnvelope.Message))
 
     def handleLocalStopNode(self, message, envelope):
         """
@@ -592,7 +605,7 @@ class SystemManagerImplementation(object):
 
                 stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
                 self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), stopEnvelope)
+                self.client.forwardMessage(stopEnvelope)
 
         else:
             self.clusterInfo.state = States.REGISTERED
@@ -623,7 +636,7 @@ class SystemManagerImplementation(object):
                 if "devices" in message:
                     responseEnvelope.Message["devices"] = envelope.Message["devices"]
 
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), responseEnvelope)
+                self.client.forwardMessage(responseEnvelope)
 
         else:
             log.debug("%s does not have a Stop message originating from %s", message, self.node)
@@ -646,7 +659,7 @@ class SystemManagerImplementation(object):
                 configuration.removeDevice(node, d)
             except Exception as e:
                 log.error("Could not remove '%s' from '%s' :%s", d, node, e)
-        sendMessageToRouter("ipc://{0}.ipc".format(self.node), envelope.toResponse(message))
+        self.client.forwardMessage(envelope.toResponse(message))
 
     def handleLocalUnregisterDeviceManagersResponse(self, message, envelope):
         """
@@ -739,7 +752,7 @@ class SystemManagerImplementation(object):
         configuration.changeState(node, None, States.STARTING)
 
         # start node
-        sendMessageToRouter("ipc://{0}.ipc".format(self.node), StartNode(node))
+        self.client.forwardMessage(StartNode(node))
 
         # send registration response
         return {"state": States.REGISTERED}
@@ -791,7 +804,7 @@ class SystemManagerImplementation(object):
                 # last related message, so pick up the stored message and send it out
                 storedMessageEnvelope = self.messageTracker.remove(envelope.MessageID)
                 if storedMessageEnvelope is not None:
-                    sendMessageToRouter("ipc://{0}.ipc".format(self.node), storedMessageEnvelope)
+                    self.client.forwardMessage(storedMessageEnvelope)
         else:
             response["error"] = "Received start message but current role is '{0}'".format(self.clusterInfo.role)
             log.error(response["error"])
@@ -927,7 +940,7 @@ class SystemManagerImplementation(object):
                     if envelope.From == node_name:
                         loadMessageWithRegisteredDevices(node_name, startEnvelope.Message, "", a_node)
                 logging.debug("Sending message to %s to start all REGISTERED devices: %s", envelope.From, startEnvelope.Message)
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), startEnvelope)
+                self.client.forwardMessage(startEnvelope)
 
             elif "error" in message:
                 log.error(message["error"])
@@ -1028,7 +1041,7 @@ class SystemManagerImplementation(object):
             log.debug("Sending stop to %s/%s", self.node, deviceManager)
             stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
             self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
-            sendMessageToRouter("ipc://{0}.ipc".format(self.node), stopEnvelope)
+            self.client.forwardMessage(stopEnvelope)
 
     def handleStopDeviceManagersResponse(self, message, envelope):
         """
@@ -1051,7 +1064,7 @@ class SystemManagerImplementation(object):
         if not self.messageTracker.hasMoreRelatedMessages(original_message_id):
             original_message = self.messageTracker.remove(original_message_id)
             if original_message is not None:
-                sendMessageToRouter("ipc://{0}.ipc".format(self.node), original_message)
+                self.client.forwardMessage(original_message)
 
     def handleStopNode(self, message, envelope):
         """
@@ -1070,7 +1083,7 @@ class SystemManagerImplementation(object):
             localStopNodeMessage = LocalStopNode(self.node)
             self.messageTracker.add(envelope)
             self.messageTracker.addRelatedMessage(envelope.MessageID, localStopNodeMessage.MessageID)
-            sendMessageToRouter("ipc://{0}.ipc".format(self.node), localStopNodeMessage)
+            self.client.forwardMessage(localStopNodeMessage)
 
         else:
             self.clusterInfo.state = States.REGISTERED
@@ -1112,15 +1125,15 @@ class SystemManagerImplementation(object):
                 originalMessageEnvelope = self.messageTracker.remove(originalMessageId)
                 if originalMessageEnvelope is not None:
                     if self.messageTracker.isARelatedMessage(originalMessageEnvelope.MessageID):
-                        sendMessageToRouter("ipc://{0}.ipc".format(self.node), originalMessageEnvelope)
+                        self.client.forwardMessage(originalMessageEnvelope)
                     elif self.messageTracker.isInMessages(originalMessageEnvelope.MessageID):
                         responseEnvelope = originalMessageEnvelope.toResponse(originalMessageEnvelope.Message)
                         responseEnvelope.Message["state"] = States.REGISTERED
                         if "devices" in message:
                             responseEnvelope.Message["devices"] = envelope.Message["devices"]
-                        sendMessageToRouter("ipc://{0}.ipc".format(self.node), responseEnvelope)
+                        self.client.forwardMessage(responseEnvelope)
                     elif type(originalMessageEnvelope) == DisableNode:
-                        sendMessage(self.clusterInfo.getNodeAddress(originalMessageEnvelope.From), originalMessageEnvelope)
+                        self.client.forwardMessage(originalMessageEnvelope)
 
             elif "error" in message:
                 log.error(message["error"])
@@ -1158,7 +1171,7 @@ class SystemManagerImplementation(object):
         log.debug("Received an unregister message from the active system manager")
         if self.clusterInfo.state == States.REGISTERED:
             self.clusterInfo.state = States.DEPLOYED
-            sendMessageToRouter("ipc://{0}.ipc".format(self.node), envelope.toResponse(message))
+            self.client.forwardMessage(envelope.toResponse(message))
             if self.clusterInfo.role != Roles.ACTIVE:
                 self.stopFlag.set()
 
@@ -1245,7 +1258,7 @@ class SystemManagerImplementation(object):
                                                   fullDeviceName,
                                                   deviceManagerImplementationMap[deviceInfo.type],
                                                   deviceInfo.properties)
-                    deviceManager.start()
+                    deviceManager.start(timeout=1)
 
                     # add device manager to the local device manager list
                     self.sharedLock.acquire()
@@ -1258,7 +1271,8 @@ class SystemManagerImplementation(object):
                     localStartDeviceManager = LocalStartDeviceManager(self.node, "{0}/{1}".format(self.node, fullDeviceName))
                     self.messageTracker.addRelatedMessage(messageId, localStartDeviceManager.MessageID)
                     # TODO: make sure the device manager's message server is up and running
-                    sendMessageToRouter(deviceManager.downstreamAddress, localStartDeviceManager)
+                    self.client.forwardMessage(localStartDeviceManager)
+
                 except MessagingException as e:
 
                     # store response message in stored message
@@ -1318,7 +1332,7 @@ def main():
     logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s:%(process)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
 
     # parse command line arguments
-    parser = argparse.ArgumentParser(description="Dynamite system manager")
+    parser = argparse.ArgumentParser(description="C4 system manager")
     parser.add_argument("-s", "--sm-addr", action="store", dest="sm_addr", help="Address of the active system manager.  The system manager will start up as a thin node.")
     parser.add_argument("-v", "--verbose", action="count", help="Displays more log information")
     parser.add_argument("-n", "--node", action="store", help="Node name for this system manager.  Must match a node in the bill of materials (i.e. bom.json).")

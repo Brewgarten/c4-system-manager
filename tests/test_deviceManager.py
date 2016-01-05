@@ -2,7 +2,7 @@ import logging
 import multiprocessing
 import time
 
-from c4.messaging import Router, sendMessageToRouter
+from c4.messaging import Router, RouterClient
 from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation, DeviceManagerStatus
 from c4.system.messages import Status
 
@@ -26,18 +26,19 @@ class SampleDeviceManager(DeviceManagerImplementation):
         status.Message = self.properties
         return status
 
-def test_deviceManager(cleandir):
+def test_deviceManager(temporaryIPCPath):
 
-    router = Router("ipc://test.ipc")  # @UnusedVariable
+    router = Router("test")  # @UnusedVariable
 
     deviceManager = DeviceManager("test", "testDM", SampleDeviceManager)
     deviceManager.start()
 
     time.sleep(0.1)
 
-    sendMessageToRouter("ipc://test|testDM.ipc", Status("test/testDM"))
-    sendMessageToRouter("ipc://test|testDM.ipc", Status("test/testDM"))
-    sendMessageToRouter("ipc://test|testDM.ipc", Status("test/testDM"))
+    client = RouterClient("test/testDM")
+    client.forwardMessage(Status("test/testDM"))
+    client.forwardMessage(Status("test/testDM"))
+    client.forwardMessage(Status("test/testDM"))
 
     time.sleep(0.1)
 

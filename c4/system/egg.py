@@ -3,14 +3,14 @@ import base64
 import os
 import subprocess
 
-from c4.messaging import sendMessage
+from c4.messaging import RouterClient
 from c4.system.messages import DeployDeviceManager, UndeployDeviceManager
 
 def sendDeployToOtherSystemManagers(node_name, node_names, sysmgr_address, type, file_name, data):
     """
     Handles a message from the rest server to the active system manager to distribute an egg
     to other system managers.
-    
+
     :param node_name: The name of this node
     :type node_name: str
     :param node_names: The list of nodes in the system, so that the active system manager can send a deploy egg message to all other system managers.
@@ -24,6 +24,7 @@ def sendDeployToOtherSystemManagers(node_name, node_names, sysmgr_address, type,
     :param data: The base 64 encoded egg file
     :type data: str
     """
+    client = RouterClient(node_name)
     # distribute to other system managers, if any
     for a_node_name in node_names:
         # but skip ourself
@@ -34,9 +35,9 @@ def sendDeployToOtherSystemManagers(node_name, node_names, sysmgr_address, type,
             new_message.Message["type"] = type
             new_message.Message["data"] = data
             new_message.Message["file_name"] = file_name
-            sendMessage(sysmgr_address, new_message)
+            client.forwardMessage(new_message)
 
-    
+
 def deployEgg(type, file_name, data):
     """
     Deploys the egg to the system.  Assumes system manager is run as root.
@@ -76,7 +77,7 @@ def sendUndeployToOtherSystemManagers(node_name, node_names, sysmgr_address, typ
     """
     Handles a message from the rest server to the active system manager to distribute an egg
     to other system managers.
-    
+
     :param node_name: The name of this node
     :type node_name: str
     :param node_names: The list of nodes in the system, so that the active system manager can send a deploy egg message to all other system managers.
@@ -86,6 +87,7 @@ def sendUndeployToOtherSystemManagers(node_name, node_names, sysmgr_address, typ
     :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.system.devices.mydm.MyDM
     :type type: str
     """
+    client = RouterClient(node_name)
     # distribute to other system managers, if any
     for a_node_name in node_names:
         # but skip ourself
@@ -94,9 +96,8 @@ def sendUndeployToOtherSystemManagers(node_name, node_names, sysmgr_address, typ
             logging.debug("Sending undeploy device manager request to %s", a_node_name)
             new_message = UndeployDeviceManager("system-manager", a_node_name)
             new_message.Message["type"] = type
-            sendMessage(sysmgr_address, new_message)
+            client.forwardMessage(new_message)
 
-    
 def undeployEgg(type):
     """
     Undeploys the egg from the system.  Assumes system manager is run as root.

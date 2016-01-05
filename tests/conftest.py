@@ -5,7 +5,11 @@ import tempfile
 
 import pytest
 
-from c4.system.configuration import Configuration, DBClusterInfo, DeviceInfo, NodeInfo, PlatformInfo, Roles
+from c4.system.configuration import (Configuration,
+                                     DBClusterInfo, DeviceInfo,
+                                     NodeInfo,
+                                     PlatformInfo,
+                                     Roles)
 from c4.system.manager import SystemManager
 
 
@@ -29,13 +33,12 @@ def cleandir(request):
     return newCurrentWorkingDirectory
 
 @pytest.fixture
-def system(request, temporaryDatabasePaths, cleandir):
+def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
     """
     Set up a basic system configuration
     """
     configuration = Configuration()
     platform = PlatformInfo("im-devops", "c4.system.platforms.devops.IMDevOps")
-    platform.settings["policy_engine_enabled"] = True
     configuration.addPlatform(platform)
 
     node1 = NodeInfo("rack1-master1", "tcp://127.0.0.1:5000", role=Roles.ACTIVE)
@@ -93,6 +96,20 @@ def temporaryDatabasePaths(request, monkeypatch):
 #     newpath = tempfile.mkdtemp(dir="/tmp")
     monkeypatch.setattr("c4.system.db.BACKUP_PATH", newpath)
     monkeypatch.setattr("c4.system.db.DATABASE_PATH", newpath)
+
+    def removeTemporaryDirectory():
+        shutil.rmtree(newpath)
+    request.addfinalizer(removeTemporaryDirectory)
+    return newpath
+
+@pytest.fixture
+def temporaryIPCPath(request, monkeypatch):
+    """
+    Create a new temporary directory and set c4.messaging.zeromqMessaging.DEFAULT_IPC_PATH to it
+    """
+    newpath = tempfile.mkdtemp(dir="/dev/shm")
+#     newpath = tempfile.mkdtemp(dir="/tmp")
+    monkeypatch.setattr("c4.messaging.zeromqMessaging.DEFAULT_IPC_PATH", newpath)
 
     def removeTemporaryDirectory():
         shutil.rmtree(newpath)

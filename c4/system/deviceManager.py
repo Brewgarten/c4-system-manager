@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 """
 This module provides a device manager interface to implement device managers.
 
@@ -34,7 +32,7 @@ It can then be instantiated using
 
 .. code-block:: python
 
-    deviceManager = DeviceManager("localhost", "myDeviceManager", MyDM)
+    deviceManager = DeviceManager("localhost", "myDeviceManager")
 
 """
 
@@ -43,12 +41,17 @@ import logging
 import sys
 import time
 
-from c4.messaging import DealerRouter, callMessageHandler, sendMessageToRouter
-from c4.utils.jsonutil import JSONSerializable
+from c4.messaging import (DealerRouter,
+                          RouterClient,
+                          callMessageHandler)
 from c4.system.configuration import States
+from c4.utils.jsonutil import JSONSerializable
+from c4.utils.logutil import ClassLogger
+
 
 log = logging.getLogger(__name__)
 
+@ClassLogger
 class DeviceManager(DealerRouter):
     """
     Device Manager
@@ -66,14 +69,9 @@ class DeviceManager(DealerRouter):
     def __init__(self, node, name, implementation, properties=None):
         addressParts = name.split("/")
         addressParts.insert(0, node)
-
-        upstreamAddress = "ipc://{}.ipc".format("|".join(addressParts[:-1]))
-        log.debug("%s %s upstreamAddress %s", node, name, upstreamAddress)
+        routerAddress = "/".join(addressParts[:-1])
         address = "/".join(addressParts)
-        downstreamAddress = "ipc://{}.ipc".format("|".join(addressParts))
-        log.debug("%s %s downstreamAddress %s", node, name, downstreamAddress)
-
-        super(DeviceManager, self).__init__(upstreamAddress, address, downstreamAddress, name="DM")
+        super(DeviceManager, self).__init__(routerAddress, address, register=True, name="DM")
 
         # set up device manager implementation
         self.implementation = implementation(node, name, properties)
@@ -158,11 +156,8 @@ class DeviceManagerImplementation(object):
         message["state"] = States.REGISTERED
         envelope.toResponse(message)
         envelope.From = "{0}/{1}".format(self.node, self.name)
-        full_name = envelope.From
-        last_slash = full_name.rfind('/')
-        parent_name = full_name[:last_slash]
-        parent_address = parent_name.replace('/', '|')
-        sendMessageToRouter("ipc://{0}.ipc".format(parent_address), envelope)
+        upstreamAddress = "/".join(envelope.From.split("/")[:-1])
+        RouterClient(upstreamAddress).forwardMessage(envelope)
 
         self.stopFlag.set()
 
