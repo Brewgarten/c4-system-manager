@@ -77,10 +77,10 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
 
         for node, systemManager in systemSetup.items():
             log.debug("stopping %s", node)
-            systemManager.stop(wait=True)
+            systemManager.stop()
 
         log.debug("stopping active system manager %s", systemManagerNode)
-        activeSystemManager.stop(wait=True)
+        activeSystemManager.stop()
 
     request.addfinalizer(systemTeardown)
 

@@ -36,8 +36,9 @@ It can then be instantiated using
 
 """
 
+import ctypes
 import datetime
-import logging
+import multiprocessing
 import sys
 import time
 
@@ -45,11 +46,10 @@ from c4.messaging import (DealerRouter,
                           RouterClient,
                           callMessageHandler)
 from c4.system.configuration import States
+from c4.system.messages import LocalStopDeviceManager
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 
-
-log = logging.getLogger(__name__)
 
 @ClassLogger
 class DeviceManager(DealerRouter):
@@ -75,9 +75,6 @@ class DeviceManager(DealerRouter):
 
         # set up device manager implementation
         self.implementation = implementation(node, name, properties)
-        # connect stop flag to allow implementation to stop device manager
-        self.implementation.stopFlag = self.stopFlag
-
         self.addHandler(self.implementation.routeMessage)
 
     @property
@@ -89,24 +86,59 @@ class DeviceManager(DealerRouter):
         """
         return self.implementation.node
 
-    def stop(self, wait=False):
+    def start(self, timeout=60):
+        """
+        Start the device manager
+
+        :param timeout: timeout in seconds
+        :type timeout: int
+        :returns: whether start was successful
+        :rtype: bool
+        """
+        self.log.debug("starting device mananager '%s'", self.address)
+        return super(DeviceManager, self).start(timeout=timeout)
+
+    def stop(self, timeout=60):
         """
         Stop the device manager
 
-        :returns: :class:`~dynamite.system.deviceManager.DeviceManager`
+        :param timeout: timeout in seconds
+        :type timeout: int
+        :returns: whether stop was successful
+        :rtype: bool
         """
-        log.debug("Stopping device manager '%s' on '%s'", self.name, self.node)
-        self.stopFlag.set()
-        if wait:
-            while self.is_alive():
-                time.sleep(1)
-            log.debug("Stopped '%s'", self.name)
-        return self
+        self.log.debug("stopping device manager '%s' on '%s'", self.address, self.node)
 
+        # stop child device managers, this is required, otherwise device manager processes won't stop
+        if self.implementation.state == States.RUNNING:
+            client = RouterClient(self.address)
+            client.sendRequest(LocalStopDeviceManager(self.routerAddress, self.address))
+
+            # give device managers and sub processes time to stop
+            end = time.time() + 60
+            while time.time() < end:
+                if self.implementation.state != States.REGISTERED:
+                    self.log.debug("waiting for device manager '%s' to return to '%s', current state is '%s'",
+                                   self.address,
+                                   repr(States.REGISTERED),
+                                   repr(self.implementation.state)
+                                   )
+                    time.sleep(1)
+                else:
+                    break
+            else:
+                self.log.error("waiting for device manager '%s' to return to '%s' timed out",
+                               self.address,
+                               repr(States.REGISTERED)
+                               )
+                return False
+
+        return super(DeviceManager, self).stop(timeout=timeout)
+
+@ClassLogger
 class DeviceManagerImplementation(object):
     """
     Device manager implementation which provides the handlers for messages.
-    This implementation will be provided to each worker in the process pool.
 
     :param node: node name
     :type node: str
@@ -123,7 +155,7 @@ class DeviceManagerImplementation(object):
             self.properties = {}
         else:
             self.properties = properties
-        self.stopFlag = None
+        self._state = multiprocessing.Value(ctypes.c_char_p, States.REGISTERED.name)  # @UndefinedVariable
 
     def handleLocalStartDeviceManager(self, message, envelope):
         """
@@ -134,13 +166,13 @@ class DeviceManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~dynamite.system.messages.Envelope`
         """
-        log.info("Received start request for %s", self.name)
-        self.start()
+        self.log.debug("received start request")
+        self.state = States.RUNNING
         module = sys.modules[self.__class__.__module__]
         return {
-                "state": States.RUNNING,
-                "version": getattr(module, "__version__", "unknown")
-                }
+            "state": self.state,
+            "version": getattr(module, "__version__", "unknown")
+        }
 
     def handleLocalStopDeviceManager(self, message, envelope):
         """
@@ -151,15 +183,11 @@ class DeviceManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~dynamite.system.messages.Envelope`
         """
-        log.info("Received stop request for %s", self.name)
-        self.stop()
-        message["state"] = States.REGISTERED
-        envelope.toResponse(message)
-        envelope.From = "{0}/{1}".format(self.node, self.name)
-        upstreamAddress = "/".join(envelope.From.split("/")[:-1])
-        RouterClient(upstreamAddress).forwardMessage(envelope)
-
-        self.stopFlag.set()
+        self.log.debug("received stop request")
+        self.state = States.REGISTERED
+        return {
+            "state": self.state
+        }
 
     def routeMessage(self, envelopeString, envelope):
         """
@@ -173,17 +201,20 @@ class DeviceManagerImplementation(object):
         """
         return callMessageHandler(self, envelope)
 
-    def start(self):
+    @property
+    def state(self):
         """
-        Start device manager implementation
+        Device manager state
         """
-        pass
+        return States.valueOf(self._state.value)
 
-    def stop(self):
-        """
-        Stop device manager implementation
-        """
-        pass
+    @state.setter
+    def state(self, state):
+        if isinstance(state, States):
+            with self._state.get_lock():
+                self._state.value = state.name
+        else:
+            self.log.error("'%s' does not match enum of type '%s'", state, States)
 
 class DeviceManagerStatus(JSONSerializable):
     """

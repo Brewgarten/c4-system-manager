@@ -4,7 +4,7 @@ import argparse
 import datetime
 import imp
 import logging
-from multiprocessing.managers import SyncManager
+import multiprocessing
 import socket
 import sys
 import time
@@ -16,23 +16,26 @@ from c4.messaging import (MessageTracker, MessagingException,
                           RouterClient,
                           callMessageHandler)
 from c4.system import db, egg
-from c4.system.configuration import (DBClusterInfo, Configuration, NodeInfo,
-                                     States, Roles, ConfigurationInfo)
+from c4.system.configuration import (DBClusterInfo,
+                                     Configuration, ConfigurationInfo,
+                                     NodeInfo,
+                                     States,
+                                     Roles)
 from c4.system.deviceManager import DeviceManager
 import c4.system.devices
-from c4.system.messages import (StartDeviceManagers, LocalStartDeviceManager, LocalStopDeviceManager,
-                                RegistrationNotification, DisableNode,
-                                StartNode, StopNode, LocalStopNode)
+from c4.system.messages import (DisableNode,
+                                LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
+                                RegistrationNotification,
+                                StartDeviceManagers, StartNode, StopNode)
 from c4.system.version import Version
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
-from c4.utils.util import (Timer, disableInterruptSignal,
-                           getFullModuleName, getModuleClasses)
+from c4.utils.util import getFullModuleName, getModuleClasses
 import platform as platformSpec
 
 
-# TODO: check what this is used for
 log = logging.getLogger(__name__)
+
 
 @ClassLogger
 class SystemManager(PeerRouter):
@@ -50,86 +53,110 @@ class SystemManager(PeerRouter):
     def __init__(self, node, clusterInfo, name="SM"):
         super(SystemManager, self).__init__(node, clusterInfo, name=name)
 
-        # FIXME: check which ones need/may to be moved to implementation
-        # FIXME: which ones need to stay shared?
-        # enable shared objects
-        self.manager = SyncManager()
-        self.manager.start(disableInterruptSignal)
-        self.sharedLock = self.manager.Lock()
-        self.sharedDict = self.manager.dict()
+        # keep one message tracker for all implementations
         self.messageTracker = MessageTracker()
 
         # set up system manager implementation
-        self.implementation = SystemManagerImplementation(node, self.clusterInfo, self.sharedLock, self.sharedDict, self.messageTracker)
-        # connect stop flag to allow implementation to stop device manager
-        self.implementation.stopFlag = self.stopFlag
+        self.implementation = SystemManagerImplementation(node, self.clusterInfo, self.messageTracker)
 
         self.addHandler(self.implementation.routeMessage)
 
-    def run(self):
+    def start(self, timeout=60):
         """
-        Run the system manager
-        """
-        self.implementation.start()
-        super(SystemManager, self).run()
-        self.implementation.stop()
+        Start the system manager
 
-    def stop(self, wait=False):
+        :param timeout: timeout in seconds
+        :type timeout: int
+        :returns: whether start was successful
+        :rtype: bool
+        """
+        self.log.debug("starting system mananager '%s'", self.address)
+        started = super(SystemManager, self).start(timeout=timeout)
+        if not started:
+            return False
+
+        self.clusterInfo.state = States.REGISTERING
+
+        # send registration notification
+        client = RouterClient(self.address)
+        envelope =  RegistrationNotification(self.address)
+        envelope.Message["node"] = NodeInfo(self.address,
+                                            self.clusterInfo.getNodeAddress(self.address),
+                                            self.clusterInfo.role,
+                                            self.clusterInfo.state)
+        envelope.Message["version"] = c4.system.__version__
+
+        # wait for state change to registered
+        end = time.time() + 60
+        while time.time() < end:
+            if self.clusterInfo.state == States.REGISTERING:
+                client.forwardMessage(envelope)
+                time.sleep(1)
+            else:
+                break
+        else:
+            self.log.error("registering '%s' timed out", self.address)
+            return False
+
+        return True
+
+    def stop(self, timeout=60):
         """
         Stop the system manager
 
-        :returns: :class:`~c4.system.manager.SystemManager`
+        :param timeout: timeout in seconds
+        :type timeout: int
+        :returns: whether stop was successful
+        :rtype: bool
         """
-        self.log.debug("Stopping '%s'", self.name)
+        self.log.debug("stopping system manager '%s'", self.address)
 
-        # stop local device managers, this is required, otherwise device manager processes won't stop
+        # stop child device managers, this is required, otherwise device manager processes won't stop
         if self.clusterInfo.state == States.RUNNING:
-            client = RouterClient(self.implementation.node)
-            client.forwardMessage(StopNode(self.implementation.node))
+            client = RouterClient(self.address)
+            client.forwardMessage(StopNode(self.address))
 
             # give device managers and sub processes time to stop
-            while self.clusterInfo.state == States.RUNNING:
-                self.log.debug("Waiting for system manager to stop, current state: %s", self.clusterInfo.state.name)
-                time.sleep(1)
+            end = time.time() + 60
+            while time.time() < end:
+                if self.clusterInfo.state != States.REGISTERED:
+                    self.log.debug("waiting for system manager '%s' to return to '%s', current state is '%s'",
+                                   self.address,
+                                   repr(States.REGISTERED),
+                                   repr(self.clusterInfo.state)
+                                   )
+                    time.sleep(1)
+                else:
+                    break
+            else:
+                self.log.error("waiting for system manager '%s' to return to '%s' timed out",
+                               self.address,
+                               repr(States.REGISTERED)
+                               )
+                return False
 
-        self.stopFlag.set()
-        if wait:
-            while self.is_alive():
-                time.sleep(1)
-            self.log.debug("Stopped '%s'", self.name)
-        return self
+        return super(SystemManager, self).stop(timeout=timeout)
 
 @ClassLogger
 class SystemManagerImplementation(object):
     """
     System manager implementation which provides the handlers for messages.
-    This implementation will be provided to each worker in the process pool.
 
     :param node: node name
     :type node: str
-    :param sharedLock: shared lock
-    :type sharedLock: :class:`~multiprocessing.managers.Lock`
-    :param sharedDict: shared dictionary
-    :type sharedDict: :class:`~multiprocessing.managers.dict`
+    :param clusterInfo: cluster information
+    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
     :param messageTracker: message tracker
     :type messageTracker: :class:`~c4.messaging.MessageTracker`
     """
-    def __init__(self, node, clusterInfo, sharedLock, sharedDict, messageTracker):
+    def __init__(self, node, clusterInfo, messageTracker):
         super(SystemManagerImplementation, self).__init__()
         self.node = node
         self.clusterInfo = clusterInfo
-        self.sharedLock = sharedLock
-        self.sharedDict = sharedDict
-        self.sharedLock.acquire()
-        if "deviceManagers" not in self.sharedDict:
-            self.sharedDict["deviceManagers"] = set()
-        self.sharedLock.release()
         self.messageTracker = messageTracker
-        self.stopFlag = None
-        # system manager router client
-        self._client = None
 
-        self.processes ={}
+        # reusable system manager router client
+        self._client = None
 
     @property
     def client(self):
@@ -140,6 +167,17 @@ class SystemManagerImplementation(object):
         if self._client is None:
             self._client = RouterClient(self.node)
         return self._client
+
+    @property
+    def deviceManagers(self):
+        """
+        Mapping of child device manager names to their processes
+        """
+        return {
+            child.address: child
+            for child in multiprocessing.active_children()
+            if isinstance(child, DeviceManager)
+        }
 
     def _handleDeployEgg(self, message, envelope):
         """
@@ -189,7 +227,7 @@ class SystemManagerImplementation(object):
         elif egg_type.startswith("c4.system.events"):
             reload(c4.system.events)
         else:
-            log.error("Unsupported egg type: %s", egg_type)
+            self.log.error("Unsupported egg type: %s", egg_type)
 
         # save version on active master only
         if self.clusterInfo.role == Roles.ACTIVE:
@@ -208,7 +246,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Undeploy device manager request from %s", envelope.From)
+        self.log.debug("Undeploy device manager request from %s", envelope.From)
         # if from rest server to the active system manager
         (node_name, component_name) = self.parseFrom(envelope.From)
         if component_name == "rest":
@@ -322,7 +360,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Deploy device manager request from %s", envelope.From)
+        self.log.debug("Deploy device manager request from %s", envelope.From)
         self._handleDeployEgg(message, envelope)
 
     def handleDisableDeviceManager(self, message, envelope):
@@ -336,11 +374,11 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Disable device manager request from %s for %s",
+        self.log.debug("Disable device manager request from %s for %s",
                     envelope.From, message)
 
         if "devices" not in message:
-            log.error("Unable to disable devices because no devices were supplied.")
+            self.log.error("Unable to disable devices because no devices were supplied.")
             return
 
         response = {'status': States.MAINTENANCE}
@@ -358,23 +396,23 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Disable device manager response from %s for %s",
+        self.log.debug("Disable device manager response from %s for %s",
                     envelope.From, message)
 
         # validate role
         if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received disable device manager response from '%s' but current role is '%s', should be '%s'",
+            self.log.error("Received disable device manager response from '%s' but current role is '%s', should be '%s'",
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
         (node_name, from_device_name) = self.parseFrom(envelope.From)
 
         if "devices" not in message:
-            log.error("Received disable device manager response, but no devices were provided.")
+            self.log.error("Received disable device manager response, but no devices were provided.")
             return
 
         for device_name in message["devices"]:
-            log.info("Changing %s/%s state from REGISTERED to MAINTENANCE.", node_name, device_name)
+            self.log.debug("Changing %s/%s state from REGISTERED to MAINTENANCE.", node_name, device_name)
             Configuration().changeState(node_name, device_name, States.MAINTENANCE)
 
     def handleDisableNode(self, message, envelope):
@@ -388,7 +426,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Disable node request from %s for %s",
+        self.log.debug("Disable node request from %s for %s",
                     envelope.From, message)
 
         response = {'status': States.MAINTENANCE}
@@ -405,12 +443,12 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Disable node response from %s for %s",
+        self.log.debug("Disable node response from %s for %s",
                     envelope.From, message)
 
         # validate role
         if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received disable node response from '%s' but current role is '%s', should be '%s'",
+            self.log.error("Received disable node response from '%s' but current role is '%s', should be '%s'",
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
@@ -430,11 +468,11 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Enable device manager request from %s for %s",
+        self.log.debug("Enable device manager request from %s for %s",
                     envelope.From, message)
 
         if "devices" not in message:
-            log.error("Unable to enable devices because no devices were supplied.")
+            self.log.error("Unable to enable devices because no devices were supplied.")
             return
 
         response = {'status': States.REGISTERED}
@@ -452,17 +490,17 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Enable device manager response from %s for %s",
+        self.log.debug("Enable device manager response from %s for %s",
                     envelope.From, message)
 
         # validate role
         if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received enable device manager response from '%s' but current role is '%s', should be '%s'",
+            self.log.error("Received enable device manager response from '%s' but current role is '%s', should be '%s'",
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
         if "devices" not in message:
-            log.error("Unable to enable devices because no devices were supplied.")
+            self.log.error("Unable to enable devices because no devices were supplied.")
             return
 
         (node_name, from_device_name) = self.parseFrom(envelope.From)
@@ -470,7 +508,7 @@ class SystemManagerImplementation(object):
         configuration = Configuration()
         # change device state from MAINTENANCE to REGISTERED
         for device_name in message["devices"]:
-            log.info("Changing %s/%s state from MAINTENANCE to REGISTERED.", node_name, device_name)
+            self.log.debug("Changing %s/%s state from MAINTENANCE to REGISTERED.", node_name, device_name)
             configuration.changeState(node_name, device_name, States.REGISTERED)
 
         if self.messageTracker.isARelatedMessage(envelope.RelatesTo):
@@ -480,7 +518,7 @@ class SystemManagerImplementation(object):
                 # the devices are now all registered, so now start them
                 # the original_message came from handleStartdevicemanager
                 if type(original_message) == StartDeviceManagers:
-                    log.debug("Sending original start message: %s to %s", original_message.Message, original_message.To)
+                    self.log.debug("Sending original start message: %s to %s", original_message.Message, original_message.To)
                     self.client.forwardMessage(original_message)
 
     def handleEnableNode(self, message, envelope):
@@ -494,7 +532,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Enable node request from %s for %s",
+        self.log.debug("Enable node request from %s for %s",
                     envelope.From, message)
 
         response = {'status': States.REGISTERED}
@@ -511,12 +549,12 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Enable node response from %s for %s",
+        self.log.debug("Enable node response from %s for %s",
                     envelope.From, message)
 
         # validate role
         if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received enable node response from '%s' but current role is '%s', should be '%s'",
+            self.log.error("Received enable node response from '%s' but current role is '%s', should be '%s'",
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
@@ -534,7 +572,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received start acknowledgement from '%s'", envelope.From)
+        self.log.debug("Received start acknowledgement from '%s'", envelope.From)
         (node, device_name) = self.parseFrom(envelope.From)
 
         # remove response from the related messages list
@@ -559,15 +597,12 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received stop acknowledgement from '%s'", envelope.From)
+        self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
         (node, device_name) = self.parseFrom(envelope.From)
 
-        # remove device manager from list
-        self.sharedLock.acquire()
-        deviceManagers = self.sharedDict["deviceManagers"]
-        deviceManagers.remove(device_name)
-        self.sharedDict["deviceManagers"] = deviceManagers
-        self.sharedLock.release()
+        # get device manager sub process
+        deviceManager = self.deviceManagers.get(envelope.From)
+        deviceManager.stop()
 
         # remove response from the related messages list
         originalMessageId = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
@@ -598,12 +633,11 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         # send stop to all device managers if we have any running
-        if self.sharedDict['deviceManagers']:
+        deviceManagers = self.deviceManagers
+        if deviceManagers:
             self.messageTracker.add(envelope)
-            deviceManagers = self.sharedDict['deviceManagers']
-            for deviceManager in deviceManagers:
-
-                stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
+            for deviceManagerAddress in deviceManagers.keys():
+                stopEnvelope = LocalStopDeviceManager(self.node, deviceManagerAddress)
                 self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
                 self.client.forwardMessage(stopEnvelope)
 
@@ -639,7 +673,7 @@ class SystemManagerImplementation(object):
                 self.client.forwardMessage(responseEnvelope)
 
         else:
-            log.debug("%s does not have a Stop message originating from %s", message, self.node)
+            self.log.debug("%s does not have a Stop message originating from %s", message, self.node)
 
     def handleLocalUnregisterDeviceManagers(self, message, envelope):
         """
@@ -650,7 +684,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.debug("Unregistering '%s' on '%s'", message['devices'], message['node'])
+        self.log.debug("Unregistering '%s' on '%s'", message['devices'], message['node'])
 
         node = message['node']
         configuration = Configuration()
@@ -658,7 +692,7 @@ class SystemManagerImplementation(object):
             try:
                 configuration.removeDevice(node, d)
             except Exception as e:
-                log.error("Could not remove '%s' from '%s' :%s", d, node, e)
+                self.log.error("Could not remove '%s' from '%s' :%s", d, node, e)
         self.client.forwardMessage(envelope.toResponse(message))
 
     def handleLocalUnregisterDeviceManagersResponse(self, message, envelope):
@@ -688,7 +722,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Register device manager request (local) from %s for %s on %s with type %s",
+        self.log.debug("Register device manager request (local) from %s for %s on %s with type %s",
                      envelope.From, message["devices"], self.node, message["type"])
         # the thin system manager does nothing to add a device
         # the work is all done in the active system manager to update the configuration
@@ -705,12 +739,12 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Register device manager response from %s for %s on %s with type %s",
+        self.log.debug("Register device manager response from %s for %s on %s with type %s",
                      envelope.From, message["devices"], envelope.From, message["type"])
 
         # validate role
         if self.clusterInfo.role != Roles.ACTIVE:
-            log.error("Received register device manager response from '%s' but current role is '%s', should be '%s'",
+            self.log.error("Received register device manager response from '%s' but current role is '%s', should be '%s'",
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
@@ -722,7 +756,7 @@ class SystemManagerImplementation(object):
                 # handle hierarchical device name - if parent doesn't exist error
                 node_name = envelope.From
                 configuration.addDevice(node_name, device_name, message["type"])
-                log.debug("Added device %s to node %s.", device_name, node_name)
+                self.log.debug("Added device %s to node %s.", device_name, node_name)
             except:
                 # addDevice will already log the error
                 pass
@@ -738,15 +772,15 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Registration message from %s", envelope.From)
+        self.log.debug("Registration message from %s", envelope.From)
 
         # Is node in configuration?
         configuration = Configuration()
         node = envelope.From
         if node not in configuration.getNodeNames():
-            log.info("Adding %s", node)
-            configuration.addNode(envelope.Message['NodeInfo'])
-            log.info("%s added to the configuration",node)
+            self.log.debug("Adding %s", node)
+            configuration.addNode(envelope.Message["node"])
+            self.log.debug("%s added to the configuration",node)
 
         # change directly to starting state since we are going to start the node
         configuration.changeState(node, None, States.STARTING)
@@ -763,14 +797,14 @@ class SystemManagerImplementation(object):
         """
         if self.clusterInfo.state == States.REGISTERING:
             self.clusterInfo.state = States.REGISTERED
-            log.info("'%s' is now registered", self.node)
+            self.log.debug("'%s' is now registered", self.node)
         elif self.clusterInfo.state == States.STARTING or self.clusterInfo.state == States.RUNNING:
             # we implicitly know that the active system manager must have registered because it sent
             # a start message
             pass
         else:
             # TODO: skip if we are already started/starting
-            log.error("Received register node acknowlegdment but current state is '%s'", self.clusterInfo.state)
+            self.log.error("Received register node acknowlegdment but current state is '%s'", self.clusterInfo.state)
 
     def handleStartDeviceManagers(self, message, envelope):
         """
@@ -781,7 +815,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received start device manager message %s", message)
+        self.log.debug("Received start device manager message %s", message)
         response = {}
         if self.clusterInfo.state == States.RUNNING:
 
@@ -807,7 +841,7 @@ class SystemManagerImplementation(object):
                     self.client.forwardMessage(storedMessageEnvelope)
         else:
             response["error"] = "Received start message but current role is '{0}'".format(self.clusterInfo.role)
-            log.error(response["error"])
+            self.log.error(response["error"])
             return response
 
     def handleStartDeviceManagersResponse(self, message, envelope):
@@ -820,7 +854,7 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         if self.clusterInfo.role == Roles.ACTIVE:
-            log.debug("Received start acknowlegdment from '%s'", envelope.From)
+            self.log.debug("Received start acknowlegdment from '%s'", envelope.From)
             (node_name, component_name) = self.parseFrom(envelope.From)
             if "devices" in message:
 
@@ -831,11 +865,11 @@ class SystemManagerImplementation(object):
                         configuration.changeState(node_name, name, States.RUNNING)
                     elif "error" in info:
                         configuration.changeState(node_name, name, States.REGISTERED)
-                        log.error(info["error"])
+                        self.log.error(info["error"])
             else:
-                log.error("Unsupported start acknowlegdment for %s", message)
+                self.log.error("Unsupported start acknowlegdment for %s", message)
         else:
-            log.error("Received start acknowlegdment from '%s' but current role is '%s'",
+            self.log.error("Received start acknowlegdment from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
 
     def handleStartNode(self):
@@ -843,17 +877,12 @@ class SystemManagerImplementation(object):
         Handle :class:`~c4.system.messages.StartNode` messages
 
         """
-        log.info("Received start node message")
+        self.log.debug("Received start node message")
         response = {}
 
         if self.clusterInfo.state == States.REGISTERED or self.clusterInfo.state == States.REGISTERING:
             self.clusterInfo.state = States.RUNNING
             response["state"] = States.RUNNING
-
-            # remove register timer
-            registerTimer = self.processes.pop("registerTimer")
-            registerTimer.terminate()
-            registerTimer.join()
 
             # TODO: check and revise if necessary
             # get version for this node's DEPLOYED devices and system-manager
@@ -869,7 +898,7 @@ class SystemManagerImplementation(object):
 
         else:
             response["error"] = "Received start message but current state is '{0}'".format(self.clusterInfo.state)
-            log.error(response["error"])
+            self.log.error(response["error"])
         return response
 
     def handleStartNodeResponse(self, message, envelope):
@@ -921,7 +950,7 @@ class SystemManagerImplementation(object):
                 _saveVersionByType("", nodeInfo, deviceType, version)
 
         if self.clusterInfo.role == Roles.ACTIVE:
-            log.debug("Received start node acknowlegdment from '%s'", envelope.From)
+            self.log.debug("Received start node acknowlegdment from '%s'", envelope.From)
             if "state" in message and isinstance(message["state"], States):
 
                 # change state of the node in the configuration to running
@@ -943,11 +972,11 @@ class SystemManagerImplementation(object):
                 self.client.forwardMessage(startEnvelope)
 
             elif "error" in message:
-                log.error(message["error"])
+                self.log.error(message["error"])
             else:
-                log.error("Unsupported start acknowlegdment for %s", message)
+                self.log.error("Unsupported start acknowlegdment for %s", message)
         else:
-            log.error("Received start acknowlegdment from '%s' but current role is '%s'",
+            self.log.error("Received start acknowlegdment from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
 
     def handleStatus(self, message, envelope):
@@ -960,7 +989,7 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         # TODO: what about status requests to the specific system manager nodes, include more details?
-        log.debug("Received status request")
+        self.log.debug("Received status request")
         status = SystemManagerStatus()
         status.state = self.clusterInfo.state
         return status
@@ -984,8 +1013,8 @@ class SystemManagerImplementation(object):
             try:
                 statusJSON = message.toJSON(True)
                 # TODO: we should think if showing the status message is necessary as it produces a lot of output
-                # log.debug("Status from %s:\n%s", envelope.From, message.toJSON(pretty=True))
-                log.debug("Received status from %s", envelope.From)
+                # self.log.debug("Status from %s:\n%s", envelope.From, message.toJSON(pretty=True))
+                self.log.debug("Received status from %s", envelope.From)
 
                 if name:
                     configuration = Configuration()
@@ -1018,10 +1047,10 @@ class SystemManagerImplementation(object):
                 dbm.write("commit")
                 dbm.close()
             except Exception as e:
-                log.error("%s needs to be a status message. Error:%s", message, e)
+                self.log.error("%s needs to be a status message. Error:%s", message, e)
 
         else:
-            log.error("Received status response from '%s' but current role is '%s'",
+            self.log.error("Received status response from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
 
     def handleStopDeviceManagers(self, message, envelope):
@@ -1033,12 +1062,12 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received stop request for %s from %s", message, envelope.From)
+        self.log.debug("Received stop request for %s from %s", message, envelope.From)
 
         self.messageTracker.add(envelope)
         for deviceManager in message["devices"]:
 
-            log.debug("Sending stop to %s/%s", self.node, deviceManager)
+            self.log.debug("Sending stop to %s/%s", self.node, deviceManager)
             stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
             self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
             self.client.forwardMessage(stopEnvelope)
@@ -1052,11 +1081,11 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received stop acknowledgement from '%s'", envelope.From)
+        self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
         (node, device_name) = self.parseFrom(envelope.From)
         configuration = Configuration()
         for device in message["devices"]:
-            log.info("Changing %s/%s state from RUNNING to REGISTERED.", node, device)
+            self.log.debug("Changing %s/%s state from RUNNING to REGISTERED.", node, device)
             configuration.changeState(node, device, States.REGISTERED)
 
         original_message_id = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
@@ -1075,10 +1104,10 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Received stop node message")
+        self.log.debug("Received stop node message")
 
         # send stop to all device managers if we have any running
-        if self.sharedDict['deviceManagers']:
+        if self.deviceManagers:
 
             localStopNodeMessage = LocalStopNode(self.node)
             self.messageTracker.add(envelope)
@@ -1100,7 +1129,7 @@ class SystemManagerImplementation(object):
         """
         if self.clusterInfo.role == Roles.ACTIVE:
 
-            log.info("Received stop node acknowlegdment from '%s'", envelope.From)
+            self.log.debug("Received stop node acknowlegdment from '%s'", envelope.From)
 
             if "state" in message and isinstance(message["state"], States):
 
@@ -1111,10 +1140,10 @@ class SystemManagerImplementation(object):
                     if "state" in deviceInfo and isinstance(deviceInfo["state"], States):
                         configuration.changeState(envelope.From, deviceName, States.REGISTERED)
                     elif "error" in deviceInfo:
-                        log.error(deviceInfo["error"])
+                        self.log.error(deviceInfo["error"])
                         allDevicesStopped = False
                     else:
-                        log.error("Unsupported stop node acknowlegdment for %s: %s", deviceName, deviceInfo)
+                        self.log.error("Unsupported stop node acknowlegdment for %s: %s", deviceName, deviceInfo)
 
                 if allDevicesStopped:
                     configuration.changeState(envelope.From, None, States.REGISTERED)
@@ -1136,12 +1165,12 @@ class SystemManagerImplementation(object):
                         self.client.forwardMessage(originalMessageEnvelope)
 
             elif "error" in message:
-                log.error(message["error"])
+                self.log.error(message["error"])
             else:
-                log.error("Unsupported stop node acknowlegdment for %s", message)
+                self.log.error("Unsupported stop node acknowlegdment for %s", message)
 
         else:
-            log.error("Received stop node acknowlegdment from '%s' but current role is '%s'",
+            self.log.error("Received stop node acknowlegdment from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
 
     def handleUndeployDeviceManager(self, message, envelope):
@@ -1156,7 +1185,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.info("Undeploy device manager request from %s", envelope.From)
+        self.log.debug("Undeploy device manager request from %s", envelope.From)
         self._handleUndeployEgg(message, envelope)
 
     def handleUnregisterNode(self, message, envelope):
@@ -1168,12 +1197,13 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        log.debug("Received an unregister message from the active system manager")
+        self.log.debug("Received an unregister message from the active system manager")
         if self.clusterInfo.state == States.REGISTERED:
             self.clusterInfo.state = States.DEPLOYED
             self.client.forwardMessage(envelope.toResponse(message))
             if self.clusterInfo.role != Roles.ACTIVE:
-                self.stopFlag.set()
+                # FIXME: determine what to do here since we are not stopping the actual process
+                pass
 
     def handleUnregisterNodeResponse(self, message, envelope):
         """
@@ -1189,13 +1219,14 @@ class SystemManagerImplementation(object):
         # This envelope should only ever be related to an UnregisterNodeRequest, so we don't do anything with that message
         if not self.messageTracker.hasMoreRelatedMessages(original_message_id):
             original_message = self.messageTracker.remove(original_message_id)
-        log.debug("Unregistering: {0}".format(envelope.From))
+        self.log.debug("Unregistering: {0}".format(envelope.From))
 
         # FIXME: The rest server is not receiving the response when the active system manager is unregistered
         configuration = Configuration()
         configuration.removeNode(envelope.From)
         if envelope.From == self.node:
-            self.stopFlag.set()
+            # FIXME: determine what to do here since we are not stopping the actual process
+            pass
 
     @classmethod
     def parseFrom(cls, from_str):
@@ -1229,15 +1260,6 @@ class SystemManagerImplementation(object):
         """
         return callMessageHandler(self, envelope)
 
-    def start(self):
-        """
-        Start system manager implementation
-        """
-        # setup and start register timer
-        self.processes["registerTimer"] = Timer("{}-RegisterTimer".format(self.node),
-                                                self.executeNodeRegistration, 1, -1, 1)
-        self.processes["registerTimer"].start()
-
     def startDevices(self, devices, deviceManagerImplementationMap, messageId):
         """
         Given a devices dict with key equals the full dotted device name (without the the host)
@@ -1258,19 +1280,12 @@ class SystemManagerImplementation(object):
                                                   fullDeviceName,
                                                   deviceManagerImplementationMap[deviceInfo.type],
                                                   deviceInfo.properties)
-                    deviceManager.start(timeout=1)
-
-                    # add device manager to the local device manager list
-                    self.sharedLock.acquire()
-                    deviceManagers = self.sharedDict["deviceManagers"]
-                    deviceManagers.add(fullDeviceName)
-                    self.sharedDict["deviceManagers"] = deviceManagers
-                    self.sharedLock.release()
+                    deviceManager.start()
 
                     # send start message to device manager
                     localStartDeviceManager = LocalStartDeviceManager(self.node, "{0}/{1}".format(self.node, fullDeviceName))
                     self.messageTracker.addRelatedMessage(messageId, localStartDeviceManager.MessageID)
-                    # TODO: make sure the device manager's message server is up and running
+                    # TODO: make sure the device manager's message server is up and running, check for start timeout
                     self.client.forwardMessage(localStartDeviceManager)
 
                 except MessagingException as e:
@@ -1291,16 +1306,6 @@ class SystemManagerImplementation(object):
                                         fullDeviceName, deviceInfo.type, self.node)}
                 }}
                 self.messageTracker.updateMessageContent(messageId, content)
-
-    def stop(self):
-        """
-        Stop system manager implementation
-        """
-        for name, process in self.processes.items():
-            self.log.debug("stopping %s", name)
-            process.terminate()
-            process.join()
-            self.log.info("stopped %s", name)
 
     def validateNodeListAndTransformWildcards(self, node_list):
         """
