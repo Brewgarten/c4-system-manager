@@ -59,77 +59,6 @@ class EnableNode(Envelope):
     def __init__(self, To):
         super(EnableNode, self).__init__("system-manager", To)
 
-class RegisterDeviceManager(Envelope):
-    """
-    A message from the active system manager to a thin system manager to add device(s)
-
-    :param To: thin system manager node
-    :type To: str
-    :param deviceList: the devices
-    :type deviceList: [str]
-    :param deviceType: the type of the device(s) to register
-    :type deviceType: str
-    """
-    def __init__(self, To, deviceList, deviceType):
-        super(RegisterDeviceManager, self).__init__('system-manager', To)
-        self.Message['devices'] = deviceList
-        self.Message['type'] = deviceType
-
-class RegistrationNotification(Envelope):
-    """
-    A message sent from a node to the system manager to register itself.
-
-    :param From: a node's address
-    :type From: str
-    """
-    def __init__(self, From):
-        super(RegistrationNotification, self).__init__(From, "system-manager")
-
-class Status(Envelope):
-    """
-    A message sent from the system manager to device managers to ask for its status.
-    The response contains a message with attributes such as ``healthy`` and ``details``.
-
-    :param To: a device manager's address
-    :type To: str
-    """
-    def __init__(self, To):
-        super(Status, self).__init__("system-manager", To, "getStatus")
-
-class StartDeviceManagers(Envelope):
-    """
-    A message sent from the system manager to a node to start device managers
-
-    :param To: node address
-    :type To: str
-    """
-    def __init__(self, To):
-        super(StartDeviceManagers, self).__init__("system-manager", To)
-        self.Message["devices"] = {}
-
-class StartNode(Envelope):
-    """
-    A message sent from the system manager to a node to start it
-
-    :param To: node address
-    :type To: str
-    """
-    def __init__(self, To):
-        super(StartNode, self).__init__("system-manager", To)
-
-class SystemManagerUpdate(Envelope):
-    """
-    A message sent from the active system manager to another system manager to indicate that the system manager has changed
-
-    :param To: node address
-    :type To: str
-    :param address: sysmgr address in the form of tcp://<address>:<port>
-    :type address: str
-    """
-    def __init__(self, To, address):
-        super(SystemManagerUpdate, self).__init__("system-manager", To)
-        self.Message['sysmgr_address'] = address
-
 class LocalStartDeviceManager(Envelope):
     """
     A message sent from a node directly to device managers to start them.
@@ -178,6 +107,84 @@ class LocalUnregisterDeviceManagers(Envelope):
         self.Message['node'] = node
         self.Message['devices'] = deviceList
 
+class Operation(Envelope):
+    """
+    A message sent from the active system manager to a device manager to perform
+    a specific operation.
+
+    :param To: a device manager
+    :type To: str
+    :param name: name of the operation
+    :type name: str
+    :param arguments: arguments
+    :param keywordArguments: keyword arguments
+    """
+    def __init__(self, To, name, *arguments, **keywordArguments):
+        super(Operation, self).__init__("system-manager", To)
+        self.Message["name"] = name
+        if arguments:
+            self.Message["arguments"] = arguments
+        if keywordArguments:
+            self.Message["keywordArguments"] = keywordArguments
+
+class RegisterDeviceManager(Envelope):
+    """
+    A message from the active system manager to a thin system manager to add device(s)
+
+    :param To: thin system manager node
+    :type To: str
+    :param deviceList: the devices
+    :type deviceList: [str]
+    :param deviceType: the type of the device(s) to register
+    :type deviceType: str
+    """
+    def __init__(self, To, deviceList, deviceType):
+        super(RegisterDeviceManager, self).__init__('system-manager', To)
+        self.Message['devices'] = deviceList
+        self.Message['type'] = deviceType
+
+class RegistrationNotification(Envelope):
+    """
+    A message sent from a node to the system manager to register itself.
+
+    :param From: a node's address
+    :type From: str
+    """
+    def __init__(self, From):
+        super(RegistrationNotification, self).__init__(From, "system-manager")
+
+class StartDeviceManagers(Envelope):
+    """
+    A message sent from the system manager to a node to start device managers
+
+    :param To: node address
+    :type To: str
+    """
+    def __init__(self, To):
+        super(StartDeviceManagers, self).__init__("system-manager", To)
+        self.Message["devices"] = {}
+
+class StartNode(Envelope):
+    """
+    A message sent from the system manager to a node to start it
+
+    :param To: node address
+    :type To: str
+    """
+    def __init__(self, To):
+        super(StartNode, self).__init__("system-manager", To)
+
+class Status(Envelope):
+    """
+    A message sent from the system manager to device managers to ask for its status.
+    The response contains a message with attributes such as ``healthy`` and ``details``.
+
+    :param To: a device manager's address
+    :type To: str
+    """
+    def __init__(self, To):
+        super(Status, self).__init__("system-manager", To, "getStatus")
+
 class StopDeviceManagers(Envelope):
     """
     A message sent from an active system manager to another system manager to stop
@@ -200,6 +207,19 @@ class StopNode(Envelope):
     """
     def __init__(self, To):
         super(StopNode, self).__init__("system-manager", To)
+
+class SystemManagerUpdate(Envelope):
+    """
+    A message sent from the active system manager to another system manager to indicate that the system manager has changed
+
+    :param To: node address
+    :type To: str
+    :param address: sysmgr address in the form of tcp://<address>:<port>
+    :type address: str
+    """
+    def __init__(self, To, address):
+        super(SystemManagerUpdate, self).__init__("system-manager", To)
+        self.Message['sysmgr_address'] = address
 
 class UndeployDeviceManager(Envelope):
     """
