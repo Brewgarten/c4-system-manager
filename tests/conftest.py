@@ -42,6 +42,7 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
     configuration.addPlatform(platform)
 
     node1 = NodeInfo("rack1-master1", "tcp://127.0.0.1:5000", role=Roles.ACTIVE)
+    node1.addDevice(DeviceInfo("info", "c4.system.devices.cluster.info.Info"))
     node1.addDevice(DeviceInfo("cpu", "c4.system.devices.cpu.Cpu"))
     node1.addDevice(DeviceInfo("unknown", "c4.system.devices.Unknown"))
     node1.addDevice(DeviceInfo("disk", "c4.system.devices.disk.Disk"))
