@@ -922,7 +922,7 @@ class DBClusterInfo(object):
         if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
             return Configuration().getAliases()
         else:
-            return {"system-manager": "system-manager"}
+            return {}
 
     def getNodeAddress(self, node):
         """

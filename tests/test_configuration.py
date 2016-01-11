@@ -122,7 +122,7 @@ def test_clusterInfo(nodes):
 
     # check db cluster information for THIN role
     dbClusterInfo.role = Roles.THIN
-    assert dbClusterInfo.aliases == {"system-manager": "system-manager"}
+    assert dbClusterInfo.aliases == {}
     assert dbClusterInfo.getNodeAddress(nodes["node1"].name) == nodes["node1"].address
     assert dbClusterInfo.getNodeAddress(nodes["node2"].name) is None
     assert dbClusterInfo.getNodeAddress("system-manager") == nodes["node1"].address
