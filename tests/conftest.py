@@ -42,23 +42,23 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
     configuration.addPlatform(platform)
 
     node1 = NodeInfo("rack1-master1", "tcp://127.0.0.1:5000", role=Roles.ACTIVE)
-    node1.addDevice(DeviceInfo("info", "c4.system.devices.cluster.info.Info"))
-    node1.addDevice(DeviceInfo("cpu", "c4.system.devices.cpu.Cpu"))
-    node1.addDevice(DeviceInfo("unknown", "c4.system.devices.Unknown"))
-    node1.addDevice(DeviceInfo("disk", "c4.system.devices.disk.Disk"))
-    node1.addDevice(DeviceInfo("memory", "c4.system.devices.mem.Memory"))
+    node1.addDevice(DeviceInfo("info", "c4.devices.cluster.info.Info"))
+    node1.addDevice(DeviceInfo("cpu", "c4.devices.cpu.Cpu"))
+    node1.addDevice(DeviceInfo("unknown", "c4.devices.Unknown"))
+    node1.addDevice(DeviceInfo("disk", "c4.devices.disk.Disk"))
+    node1.addDevice(DeviceInfo("memory", "c4.devices.mem.Memory"))
 
     configuration.addNode(node1)
     # TODO: this should automatically set role of the node to active
     configuration.addAlias("system-manager", "rack1-master1")
 
     node2 = NodeInfo("rack1-master2", "tcp://127.0.0.1:6000", role=Roles.PASSIVE)
-    node2.addDevice(DeviceInfo("cpu", "c4.system.devices.cpu.Cpu"))
-    node2.addDevice(DeviceInfo("memory", "c4.system.devices.mem.Memory"))
+    node2.addDevice(DeviceInfo("cpu", "c4.devices.cpu.Cpu"))
+    node2.addDevice(DeviceInfo("memory", "c4.devices.mem.Memory"))
     configuration.addNode(node2)
     node3 = NodeInfo("rack1-master3", "tcp://127.0.0.1:7000")
-    node3.addDevice(DeviceInfo("cpu", "c4.system.devices.cpu.Cpu"))
-    node3.addDevice(DeviceInfo("memory", "c4.system.devices.mem.Memory"))
+    node3.addDevice(DeviceInfo("cpu", "c4.devices.cpu.Cpu"))
+    node3.addDevice(DeviceInfo("memory", "c4.devices.mem.Memory"))
     configuration.addNode(node3)
     log.debug(configuration.toInfo().toJSON(pretty=True))
 

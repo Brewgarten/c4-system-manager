@@ -60,7 +60,7 @@ class StatusForAllDisks(DeviceManagerStatus):
         :param name: The name of the disk
         :type name: str
         :param disk_status: The disk status object
-        :type disk_status: :class:`~dynamite.system.devices.disk.DiskStatus`
+        :type disk_status: :class:`~dynamite.devices.disk.DiskStatus`
         """
         self.disks[name] = disk_status
 

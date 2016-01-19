@@ -86,13 +86,13 @@ def test_clusterInfo(nodes):
     platform.settings["my_timer_interval"] = 3000
     configuration.addPlatform(platform)
 
-    db2Instance1 = DeviceInfo("instance1", "c4.system.devices.db2.Instance")
-    db2Instance1.addDevice(DeviceInfo("mln1", "c4.system.devices.db2.MLN"))
-    db2Instance1.addDevice(DeviceInfo("mln2", "c4.system.devices.db2.MLN"))
-    db2Instance1.addDevice(DeviceInfo("mln3", "c4.system.devices.db2.MLN"))
-    db2Instance1.addDevice(DeviceInfo("mln4", "c4.system.devices.db2.MLN"))
+    db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
+    db2Instance1.addDevice(DeviceInfo("mln1", "c4.devices.db2.MLN"))
+    db2Instance1.addDevice(DeviceInfo("mln2", "c4.devices.db2.MLN"))
+    db2Instance1.addDevice(DeviceInfo("mln3", "c4.devices.db2.MLN"))
+    db2Instance1.addDevice(DeviceInfo("mln4", "c4.devices.db2.MLN"))
 
-    db2 = DeviceInfo("db2", "c4.system.devices.db2.DB2")
+    db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
     db2.addDevice(db2Instance1)
 
     node1 = nodes["node1"]
@@ -102,8 +102,8 @@ def test_clusterInfo(nodes):
     configuration.addAlias("system-manager", node1.name)
 
     node2 = nodes["node2"]
-    node2.addDevice(DeviceInfo("cpu", "c4.system.devices.cpu.Cpu"))
-    node2.addDevice(DeviceInfo("memory", "c4.system.devices.mem.Memory"))
+    node2.addDevice(DeviceInfo("cpu", "c4.devices.cpu.Cpu"))
+    node2.addDevice(DeviceInfo("memory", "c4.devices.mem.Memory"))
     configuration.addNode(node2)
 
     dbClusterInfo = DBClusterInfo(nodes["node1"].name, nodes["node1"].address,
@@ -161,7 +161,7 @@ def test_details(nodes):
 
     configuration.addNode(nodes["node2"])
 
-    disk = DeviceInfo("disk", "c4.system.devices.disk.Disk")
+    disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     disk.properties["disks"] = "*"
     configuration.addDevice(nodes["node2"].name, "disk", disk)
 
@@ -188,7 +188,7 @@ def test_devices(nodes):
     configuration.addNode(nodes["node1"])
     node1DeviceNames = set()
 
-    db2 = DeviceInfo("db2", "c4.system.devices.db2.DB2")
+    db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
     db2Info = configuration.addDevice(nodes["node1"].name, "db2", db2)
     assert db2Info.id > 0
     assert db2Info.parentId > 0
@@ -211,10 +211,10 @@ def test_devices(nodes):
     assert configuration.getDevice(nodes["node1"].name, "db2.nonExistingDevice") is None
 
     # make sure child devices are added as well
-    parentDevice = DeviceInfo("parent", "c4.system.devices.test.Test")
+    parentDevice = DeviceInfo("parent", "c4.devices.test.Test")
     node1DeviceNames.add("parent")
     for childNumber in range(4):
-        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.system.devices.test.Test"))
+        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.devices.test.Test"))
         node1DeviceNames.add("parent.child{0}".format(childNumber+1))
     configuration.addDevice(nodes["node1"].name, "parent", parentDevice)
 
@@ -225,14 +225,14 @@ def test_devices(nodes):
         assert node1Devices["parent.child{0}".format(childNumber+1)].id > 0
         assert node1Devices["parent.child{0}".format(childNumber+1)].parentId > 0
 
-    db2Instance1 = DeviceInfo("instance1", "c4.system.devices.db2.Instance")
+    db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
     db2Instance1Info = configuration.addDevice(nodes["node1"].name, "db2.instance1", db2Instance1)
     assert db2Instance1Info.id > 0
     assert db2Instance1Info.parentId > 0
     node1DeviceNames.add("db2.instance1")
 
     for mlnNumber in range(4):
-        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.system.devices.db2.MLN")
+        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
         mlnInfo = configuration.addDevice(nodes["node1"].name, "db2.instance1.{0}".format(mln.name), mln)
         assert mlnInfo.id > 0
         assert mlnInfo.parentId > 0
@@ -257,18 +257,18 @@ def test_devices(nodes):
 
     configuration.addNode(nodes["node2"])
 
-    cpu = DeviceInfo("cpu", "c4.system.devices.cpu.Cpu")
+    cpu = DeviceInfo("cpu", "c4.devices.cpu.Cpu")
     cpuInfo = configuration.addDevice(nodes["node2"].name, "cpu", cpu)
     assert cpuInfo.id > 0
     assert cpuInfo.parentId > 0
 
-    disk = DeviceInfo("disk", "c4.system.devices.disk.Disk")
+    disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     disk.properties["disks"] = "*"
     diskInfo = configuration.addDevice(nodes["node2"].name, "disk", disk)
     assert diskInfo.id > 0
     assert diskInfo.parentId > 0
 
-    memory = DeviceInfo("memory", "c4.system.devices.mem.Memory")
+    memory = DeviceInfo("memory", "c4.devices.mem.Memory")
     memoryInfo = configuration.addDevice(nodes["node2"].name, "memory", memory)
     assert memoryInfo.id > 0
     assert memoryInfo.parentId > 0
@@ -303,25 +303,25 @@ def test_json(nodes):
                             })
     configuration.addPlatform(platform)
 
-    db2 = DeviceInfo("db2", "c4.system.devices.db2.DB2")
+    db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
 
-    db2Instance1 = DeviceInfo("instance1", "c4.system.devices.db2.Instance")
+    db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
     db2.addDevice(db2Instance1)
 
     for mlnNumber in range(4):
-        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.system.devices.db2.MLN")
+        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
         db2Instance1.addDevice(mln)
 
     configuration.addDevice(nodes["node1"].name, "db2", db2)
 
-    cpu = DeviceInfo("cpu", "c4.system.devices.cpu.Cpu")
+    cpu = DeviceInfo("cpu", "c4.devices.cpu.Cpu")
     configuration.addDevice(nodes["node2"].name, "cpu", cpu)
 
-    disk = DeviceInfo("disk", "c4.system.devices.disk.Disk")
+    disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     disk.properties["disks"] = "*"
     configuration.addDevice(nodes["node2"].name, "disk", disk)
 
-    memory = DeviceInfo("memory", "c4.system.devices.mem.Memory")
+    memory = DeviceInfo("memory", "c4.devices.mem.Memory")
     configuration.addDevice(nodes["node2"].name, "memory", memory)
 
     # check conversion to configuration info
@@ -377,7 +377,7 @@ def test_jsonInfos():
     assert loadedNode1.state == node1.state
 
     # check device info
-    device1 = DeviceInfo("test", "c4.system.devices.test.Test")
+    device1 = DeviceInfo("test", "c4.devices.test.Test")
     device1JSON = device1.toJSON(includeClassInfo=True, pretty=True)
 
     loadedDevice1 = DeviceInfo.fromJSON(device1JSON)
@@ -388,7 +388,7 @@ def test_jsonInfos():
     assert loadedDevice1.state == device1.state
 
     # check device hierarchy info
-    device1Child = DeviceInfo("child", "c4.system.devices.test.Test")
+    device1Child = DeviceInfo("child", "c4.devices.test.Test")
     device1.addDevice(device1Child)
     device1JSON = device1.toJSON(includeClassInfo=True, pretty=True)
 
@@ -413,9 +413,9 @@ def test_nodes(nodes):
     configuration = Configuration()
 
     # make sure child devices are added as well
-    parentDevice = DeviceInfo("parent", "c4.system.devices.test.Test")
+    parentDevice = DeviceInfo("parent", "c4.devices.test.Test")
     for childNumber in range(5):
-        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.system.devices.test.Test"))
+        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.devices.test.Test"))
     nodes["node1"].addDevice(parentDevice)
 
     # add nodes
@@ -481,11 +481,11 @@ def test_resetDeviceStates(nodes):
 
     configuration.addNode(nodes["node1"])
 
-    parentDevice = DeviceInfo("parent", "c4.system.devices.test.Test", state=States.MAINTENANCE)
+    parentDevice = DeviceInfo("parent", "c4.devices.test.Test", state=States.MAINTENANCE)
     for childNumber in range(4):
-        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.system.devices.test.Test", state=States.STARTING))
+        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.devices.test.Test", state=States.STARTING))
     for childNumber in range(4):
-        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+5), "c4.system.devices.test.Test", state=States.RUNNING))
+        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+5), "c4.devices.test.Test", state=States.RUNNING))
     configuration.addDevice(nodes["node1"].name, "parent", parentDevice)
 
     configuration.resetDeviceStates()
@@ -524,14 +524,14 @@ def test_states(nodes):
 
     configuration.addNode(nodes["node1"])
 
-    db2 = DeviceInfo("db2", "c4.system.devices.db2.DB2")
+    db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
     configuration.addDevice(nodes["node1"].name, "db2", db2)
 
-    db2Instance1 = DeviceInfo("instance1", "c4.system.devices.db2.Instance")
+    db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
     configuration.addDevice(nodes["node1"].name, "db2.instance1", db2Instance1)
 
     for mlnNumber in range(4):
-        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.system.devices.db2.MLN")
+        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
         configuration.addDevice(nodes["node1"].name, "db2.instance1.{0}".format(mln.name), mln)
 
     assert configuration.changeState(nodes["node1"].name, None, States.MAINTENANCE) == nodes["node1"].state
@@ -573,7 +573,7 @@ def test_targetStates(nodes):
     configuration.removeTargetState(nodes["node1"].name)
     assert configuration.getTargetState(nodes["node1"].name) is None
 
-    disk = DeviceInfo("disk", "c4.system.devices.disk.Disk")
+    disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     configuration.addDevice(nodes["node1"].name, "disk", disk)
 
     assert configuration.changeTargetState(nodes["node1"].name, disk.name, States.MAINTENANCE) == None

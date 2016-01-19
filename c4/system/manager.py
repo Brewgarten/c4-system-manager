@@ -11,6 +11,7 @@ import time
 
 import pkg_resources
 
+import c4.devices
 from c4.messaging import (MessageTracker, MessagingException,
                           PeerRouter,
                           RouterClient,
@@ -21,8 +22,7 @@ from c4.system.configuration import (DBClusterInfo,
                                      NodeInfo,
                                      States,
                                      Roles)
-from c4.system.deviceManager import DeviceManager
-import c4.system.devices
+from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation
 from c4.system.messages import (DisableNode,
                                 LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
                                 RegistrationNotification,
@@ -84,7 +84,7 @@ class SystemManager(PeerRouter):
                                             self.clusterInfo.getNodeAddress(self.address),
                                             self.clusterInfo.role,
                                             self.clusterInfo.state)
-        envelope.Message["version"] = c4.system.__version__
+        envelope.Message["version"] = getattr(c4.system, "__version__", "unknown")
 
         # wait for state change to registered
         end = time.time() + 60
@@ -192,7 +192,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        # e.g. "c4.system.devices.mydm.MyDM"
+        # e.g. "c4.devices.mydm.MyDM"
         egg_type = message["type"]
 
         # if from rest server to the active system manager
@@ -210,7 +210,7 @@ class SystemManagerImplementation(object):
         # remove the class from the type
         temp_mod_list = egg_type.split(".")
         temp_mod_list.pop()
-        # e.g. "c4.system.devices.mydm"
+        # e.g. "c4.devices.mydm"
         egg_mod = ".".join(temp_mod_list)
         # e.g. "/c4/system/devices/mydm.py"
         egg_path = "/" + "/".join(temp_mod_list) + ".py"
@@ -218,8 +218,8 @@ class SystemManagerImplementation(object):
         # reload parent module, so that when we query for the list
         # of modules, this newly installed module will show up
         new_mod = imp.load_source(egg_mod, dist.location + egg_path)
-        if egg_type.startswith("c4.system.devices"):
-            reload(c4.system.devices)
+        if egg_type.startswith("c4.devices"):
+            reload(c4.devices)
         elif egg_type.startswith("c4.system.policies"):
             reload(c4.system.policies)
         elif egg_type.startswith("c4.system.actions"):
@@ -283,14 +283,15 @@ class SystemManagerImplementation(object):
                                  self.clusterInfo.role, self.clusterInfo.state)
             # TODO: have it automatically serialize
             envelope.Message['NodeInfo'] = node_info.toJSONSerializable(includeClassInfo=True)
-            envelope.Message['version'] = c4.system.__version__
+            envelope.Message['version'] = getattr(c4.system, "__version__", "unknown")
             self.client.forwardMessage(envelope)
 
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
-        deviceManagerImplementations = sorted(getModuleClasses(c4.system.devices, c4.system.deviceManager.DeviceManagerImplementation))
-        if c4.system.deviceManager.DeviceManagerImplementation in deviceManagerImplementations:
-            deviceManagerImplementations.remove(c4.system.deviceManager.DeviceManagerImplementation)
+        deviceManagerImplementations = sorted(getModuleClasses(c4.devices, DeviceManagerImplementation))
+
+        if DeviceManagerImplementation in deviceManagerImplementations:
+            deviceManagerImplementations.remove(DeviceManagerImplementation)
         return deviceManagerImplementations
 
     # TODO: documentation needs to be updated
@@ -893,7 +894,7 @@ class SystemManagerImplementation(object):
                 dmModule = sys.modules[dmClass.__module__]
                 dmType = dmModule.__name__ + "." + dmClass.__name__
                 versionDict[dmType] = getattr(dmModule, "__version__", "unknown")
-            versionDict["c4.system.manager.SystemManager"] = c4.system.__version__
+            versionDict["c4.system.manager.SystemManager"] = getattr(c4.system, "__version__", "unknown")
             response["version_dict"] = versionDict
 
         else:

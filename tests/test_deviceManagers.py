@@ -4,11 +4,11 @@ import logging
 
 from _abcoll import Iterable
 
-from c4.system.devices.cpu import Cpu
-from c4.system.devices.disk import Disk
-from c4.system.devices.loadavg import LoadAvg
-from c4.system.devices.mem import Memory
-from c4.system.devices.swap import Swap
+from c4.devices.cpu import Cpu
+from c4.devices.disk import Disk
+from c4.devices.loadavg import LoadAvg
+from c4.devices.mem import Memory
+from c4.devices.swap import Swap
 
 from c4.system.deviceManager import DeviceManagerStatus
 

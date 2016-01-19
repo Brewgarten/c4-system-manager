@@ -1146,7 +1146,10 @@ class NodeInfo(JSONSerializable):
     @classmethod
     def fromJSONSerializable(clazz, d):
         if JSONSerializable.dictHasType(d, NodeInfo):
-            nodeInfo = NodeInfo(d["name"], d["address"], d["role"], States.DEPLOYED)
+            nodeInfo = NodeInfo(d["name"],
+                                d["address"],
+                                role=d.get("role", Roles.THIN),
+                                state=d.get("state", States.DEPLOYED))
             nodeInfo.devices = d.get("devices", {})
             return nodeInfo
         return JSONSerializable.fromJSONSerializable(d)
@@ -1181,7 +1184,8 @@ class NodeInfo(JSONSerializable):
         # remove database and transient information
         if "id" in serializableDict:
             del serializableDict["id"]
-        del serializableDict["state"]
+        # TODO: check where needed
+#         del serializableDict["state"]
         # remove properties from details
         del serializableDict["details"]["address"]
         del serializableDict["details"]["role"]

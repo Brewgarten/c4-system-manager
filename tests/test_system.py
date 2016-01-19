@@ -25,7 +25,7 @@ def test_system(system):
     nodeInfo = configuration.getNode("rack1-master1", flatDeviceHierarchy=True)
     assert nodeInfo.state == States.RUNNING
     for deviceInfo in nodeInfo.devices.values():
-        if deviceInfo.type ==  "c4.system.devices.Unknown":
+        if deviceInfo.type ==  "c4.devices.Unknown":
             assert deviceInfo.state == States.REGISTERED
         else:
             assert deviceInfo.state == States.RUNNING
@@ -42,7 +42,7 @@ def test_system(system):
         nodeInfo = configuration.getNode(node, flatDeviceHierarchy=True)
         assert nodeInfo.state == States.RUNNING
         for deviceInfo in nodeInfo.devices.values():
-            if deviceInfo.type ==  "c4.system.devices.Unknown":
+            if deviceInfo.type ==  "c4.devices.Unknown":
                 assert deviceInfo.state == States.REGISTERED
             else:
                 assert deviceInfo.state == States.RUNNING
@@ -53,7 +53,7 @@ def test_system(system):
     nodeInfo = configuration.getNode("rack1-master1", flatDeviceHierarchy=True)
     assert nodeInfo.state == States.RUNNING
     for deviceInfo in nodeInfo.devices.values():
-        if deviceInfo.type ==  "c4.system.devices.Unknown":
+        if deviceInfo.type ==  "c4.devices.Unknown":
             assert deviceInfo.state == States.REGISTERED
         else:
             assert deviceInfo.state == States.RUNNING

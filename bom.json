@@ -11,7 +11,7 @@
                 "cpu": {
                     "@class": "c4.system.configuration.DeviceInfo",
                     "name": "cpu",
-                    "type": "c4.system.devices.cpu.Cpu"
+                    "type": "c4.devices.cpu.Cpu"
                 },
                 "disk": {
                     "@class": "c4.system.configuration.DeviceInfo",
@@ -19,22 +19,22 @@
                     "properties": {
                         "paths": ["/"]
                     },
-                    "type": "c4.system.devices.disk.Disk"
+                    "type": "c4.devices.disk.Disk"
                 },
                 "loadavg": {
                     "@class": "c4.system.configuration.DeviceInfo",
                     "name": "loadavg",
-                    "type": "c4.system.devices.loadavg.LoadAvg"
+                    "type": "c4.devices.loadavg.LoadAvg"
                 },
                 "memory": {
                     "@class": "c4.system.configuration.DeviceInfo",
                     "name": "memory",
-                    "type": "c4.system.devices.mem.Memory"
+                    "type": "c4.devices.mem.Memory"
                 },
                 "swap": {
                     "@class": "c4.system.configuration.DeviceInfo",
                     "name": "swap",
-                    "type": "c4.system.devices.swap.Swap"
+                    "type": "c4.devices.swap.Swap"
                 }
             },
             "name": "localhost",

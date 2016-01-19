@@ -17,7 +17,7 @@ def sendDeployToOtherSystemManagers(node_name, node_names, sysmgr_address, type,
     :type node_names: list
     :param sysmgr_address: The address of the sysmgr, so that a message can be sent to it.
     :type sysmgr_address: str
-    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.system.devices.mydm.MyDM
+    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.devices.mydm.MyDM
     :type type: str
     :param file_name: The file name of the egg e.g. MyCustomDM-0.1-py2.7.egg
     :type file_name: str
@@ -42,7 +42,7 @@ def deployEgg(type, file_name, data):
     """
     Deploys the egg to the system.  Assumes system manager is run as root.
 
-    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.system.devices.mydm.MyDM
+    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.devices.mydm.MyDM
     :type type: str
     :param file_name: The file name of the egg e.g. MyCustomDM-0.1-py2.7.egg
     :type file_name: str
@@ -84,7 +84,7 @@ def sendUndeployToOtherSystemManagers(node_name, node_names, sysmgr_address, typ
     :type node_names: list
     :param sysmgr_address: The address of the sysmgr, so that a message can be sent to it.
     :type sysmgr_address: str
-    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.system.devices.mydm.MyDM
+    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.devices.mydm.MyDM
     :type type: str
     """
     client = RouterClient(node_name)
@@ -102,7 +102,7 @@ def undeployEgg(type):
     """
     Undeploys the egg from the system.  Assumes system manager is run as root.
 
-    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.system.devices.mydm.MyDM
+    :param type: Type is the dotted module names for the custom device manager class.  e.g. c4.devices.mydm.MyDM
     :type type: str
     """
     # uninstall egg
