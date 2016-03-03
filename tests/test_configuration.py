@@ -284,6 +284,113 @@ def test_devices(nodes):
     configuration.removeDevice(nodes["node1"].name, "nonExistingDevice")
     assert configuration.getDevice(nodes["node1"].name, "db2") is None
 
+
+def test_devices_no_sqlite_cte(nodes, monkeypatch):
+    """
+    Test without support for common table expressions
+    """
+    monkeypatch.setattr("sqlite3.sqlite_version", "3.8.2")
+    configuration = Configuration()
+
+    configuration.addNode(nodes["node1"])
+    node1DeviceNames = set()
+
+    db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
+    db2Info = configuration.addDevice(nodes["node1"].name, "db2", db2)
+    assert db2Info.id > 0
+    assert db2Info.parentId > 0
+    # cannot add the same device twice
+    assert configuration.addDevice(nodes["node1"].name, "db2", db2) is None
+    node1DeviceNames.add("db2")
+
+    # check that we can get the device
+    db2DeviceInfo = configuration.getDevice(nodes["node1"].name, "db2")
+    assert db2DeviceInfo.id > 0
+    assert db2DeviceInfo.parentId > 0
+    assert db2DeviceInfo.name == db2.name
+    assert db2DeviceInfo.properties == db2.properties
+    assert db2DeviceInfo.devices == db2.devices
+    assert db2DeviceInfo.type == db2.type
+
+    # check non existing device
+    assert configuration.getNode("nonExistingDevice") is None
+    assert configuration.getDevice("nonExistingNode", "db2.instance1") is None
+    assert configuration.getDevice(nodes["node1"].name, "db2.nonExistingDevice") is None
+
+    # make sure child devices are added as well
+    parentDevice = DeviceInfo("parent", "c4.devices.test.Test")
+    node1DeviceNames.add("parent")
+    for childNumber in range(4):
+        parentDevice.addDevice(DeviceInfo("child{0}".format(childNumber+1), "c4.devices.test.Test"))
+        node1DeviceNames.add("parent.child{0}".format(childNumber+1))
+    configuration.addDevice(nodes["node1"].name, "parent", parentDevice)
+
+    node1Devices = configuration.getDevices(nodes["node1"].name, flatDeviceHierarchy=True)
+    assert node1Devices["parent"].id > 0
+    assert node1Devices["parent"].parentId > 0
+    for childNumber in range(4):
+        assert node1Devices["parent.child{0}".format(childNumber+1)].id > 0
+        assert node1Devices["parent.child{0}".format(childNumber+1)].parentId > 0
+
+    db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
+    db2Instance1Info = configuration.addDevice(nodes["node1"].name, "db2.instance1", db2Instance1)
+    assert db2Instance1Info.id > 0
+    assert db2Instance1Info.parentId > 0
+    node1DeviceNames.add("db2.instance1")
+
+    for mlnNumber in range(4):
+        mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
+        mlnInfo = configuration.addDevice(nodes["node1"].name, "db2.instance1.{0}".format(mln.name), mln)
+        assert mlnInfo.id > 0
+        assert mlnInfo.parentId > 0
+        node1DeviceNames.add("db2.instance1.{0}".format(mln.name))
+
+    node1Info = configuration.getNode(nodes["node1"].name)
+    assert node1Info.devices["db2"]
+    assert node1Info.devices["db2"].devices["instance1"]
+    for mlnNumber in range(4):
+        assert node1Info.devices["db2"].devices["instance1"].devices["mln{0}".format(mlnNumber+1)]
+
+    # get device information with child devices
+    db2DeviceInfo = configuration.getDevice(nodes["node1"].name, "db2")
+    assert db2DeviceInfo.devices
+    assert db2DeviceInfo.devices["instance1"]
+    db2Instance1Info = configuration.getDevice(nodes["node1"].name, "db2.instance1")
+    for mlnNumber in range(4):
+        assert db2Instance1Info.devices["mln{0}".format(mlnNumber+1)]
+
+    # check flat hierarchy
+    assert set(configuration.getNode(nodes["node1"].name, flatDeviceHierarchy=True).devices.keys()) == node1DeviceNames
+
+    configuration.addNode(nodes["node2"])
+
+    cpu = DeviceInfo("cpu", "c4.devices.cpu.Cpu")
+    cpuInfo = configuration.addDevice(nodes["node2"].name, "cpu", cpu)
+    assert cpuInfo.id > 0
+    assert cpuInfo.parentId > 0
+
+    disk = DeviceInfo("disk", "c4.devices.disk.Disk")
+    disk.properties["disks"] = "*"
+    diskInfo = configuration.addDevice(nodes["node2"].name, "disk", disk)
+    assert diskInfo.id > 0
+    assert diskInfo.parentId > 0
+
+    memory = DeviceInfo("memory", "c4.devices.mem.Memory")
+    memoryInfo = configuration.addDevice(nodes["node2"].name, "memory", memory)
+    assert memoryInfo.id > 0
+    assert memoryInfo.parentId > 0
+
+    node2Info = configuration.getNode(nodes["node2"].name)
+    assert node2Info.devices["cpu"]
+    assert node2Info.devices["disk"]
+    assert node2Info.devices["disk"].properties["disks"] == "*"
+    assert node2Info.devices["memory"]
+
+    # remove devices and its children
+    configuration.removeDevice(nodes["node1"].name, "db2")
+    configuration.removeDevice(nodes["node1"].name, "nonExistingDevice")
+    assert configuration.getDevice(nodes["node1"].name, "db2") is None
+
 def test_json(nodes):
 
     configuration = Configuration()

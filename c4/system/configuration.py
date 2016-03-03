@@ -6,9 +6,13 @@ import json
 from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
+from c4.utils.version import BasicVersion
 from c4.system.db import DBManager
 
 log = logging.getLogger(__name__)
+
+# Lowest version of SQLite with Common Table Expression support
+SqliteCTEMinimumVersion=BasicVersion("3.8.3")
 
 class Roles(Enum):
     """
@@ -560,18 +564,46 @@ class Configuration():
         """
         try:
             if includeDevices:
-                rows = self.database.query("""
-                    with recursive
-                        configuration(id, level, name, state, type, details, parent_id) as (
-                            select id, 0, name, state, type, details, parent_id
-                            from t_sm_configuration
-                            where parent_id is null and name is ?
-                            union all
-                            select t.id, configuration.level+1, configuration.name || "." || t.name, t.state, t.type, t.details, t.parent_id
-                            from t_sm_configuration as t join configuration on t.parent_id=configuration.id
-                         order by 2 desc
-                        )
-                    select * from configuration;""", (node,))
+                import c4.system.db
+                if BasicVersion(c4.system.db.sqlite3.sqlite_version) < SqliteCTEMinimumVersion:
+                    # For versions of sqlite without common table expressions it is necessary to
+                    # emulate a hierarchical query
+
+                    # Start from the system manager
+                    frontier = self.database.query("""
+                                select id, 0, name, state, type, details, parent_id
+                                from t_sm_configuration
+                                where parent_id is null and name is ?""", (node,))
+                    if len(frontier) == 0:
+                        raise Exception("Invalid name for system manager")
+                    rows = []
+                    while len(frontier) > 0:
+                        visiting = frontier.pop(0)
+                        rows.append(visiting)
+                        # Add the children of current device
+                        frontier.extend(self.database.query("""
+                                            select t.id as id, 
+                                                   ? as level,
+                                                   ? || "." || t.name as name,
+                                                   t.state as state,
+                                                   t.type as type, 
+                                                   t.details as details,
+                                                   t.parent_id as parent_id
+                                            from t_sm_configuration as t
+                                            where parent_id = ?""", (visiting[1]+1, visiting["name"], visiting["id"])))
+                else:
+                    rows = self.database.query("""
+                        with recursive
+                            configuration(id, level, name, state, type, details, parent_id) as (
+                                select id, 0, name, state, type, details, parent_id
+                                from t_sm_configuration
+                                where parent_id is null and name is ?
+                                union all
+                                select t.id, configuration.level+1, configuration.name || "." || t.name, t.state, t.type, t.details, t.parent_id
+                                from t_sm_configuration as t join configuration on t.parent_id=configuration.id
+                             order by 2 desc
+                            )
+                        select * from configuration;""", (node,))
             else:
                 rows = self.database.query("""
                     select * from t_sm_configuration
