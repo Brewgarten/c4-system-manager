@@ -36,6 +36,11 @@ import platform as platformSpec
 
 log = logging.getLogger(__name__)
 
+NOT_RUNNING_ACTIONS = set([
+    "RegistrationNotification",
+    "StartNode",
+    "StopNode"
+])
 
 @ClassLogger
 class SystemManager(PeerRouter):
@@ -1263,7 +1268,14 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.messaging.Envelope`
         :returns: response
         """
-        return callMessageHandler(self, envelope)
+        if self.clusterInfo.state == States.RUNNING or envelope.Action in NOT_RUNNING_ACTIONS:
+            return callMessageHandler(self, envelope)
+        else:
+            error = "message with action '{action}' will not be handled because it is not allowed when the node is not in 'RUNNING' state, currently '{state}'".format(
+                action=envelope.Action,
+                state=self.clusterInfo.state.name)
+            self.log.error(error)
+            return {"error": error}
 
     def startDevices(self, devices, deviceManagerImplementationMap, messageId):
         """

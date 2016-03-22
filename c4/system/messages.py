@@ -183,7 +183,7 @@ class Status(Envelope):
     :type To: str
     """
     def __init__(self, To):
-        super(Status, self).__init__("system-manager", To, "getStatus")
+        super(Status, self).__init__("system-manager", To)
 
 class StopDeviceManagers(Envelope):
     """

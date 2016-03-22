@@ -83,6 +83,8 @@ class TestDeviceManager(object):
         assert deviceManager.start()
 
         client = RouterClient("test/testDM")
+        startResponse = client.sendRequest(LocalStartDeviceManager("test", "test/testDM"))
+
         client.forwardMessage(Operation("test/testDM", "fireAndForget"))
 
         # check missing operation
@@ -95,6 +97,7 @@ class TestDeviceManager(object):
 
         assert deviceManager.stop()
 
+        assert startResponse["state"] == States.RUNNING
         assert deviceManager.implementation.counter.value == 1
         assert missingOperationResponse == {"error": "unsupported operation 'missingOperation'"}
         assert missingArgumentsResponse == {"error": "'request' is missing required arguments 'a,b'"}

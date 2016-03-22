@@ -56,6 +56,11 @@ from c4.utils.util import callWithVariableArguments, getVariableArguments
 
 log = logging.getLogger(__name__)
 
+NOT_RUNNING_ACTIONS = set([
+    "LocalStartDeviceManager",
+    "LocalStopDeviceManager"
+])
+
 def operation(implementation):
     """
     Operation decorator to be used on methods of the device manager that
@@ -173,16 +178,14 @@ class DeviceManager(DealerRouter):
                     self.log.debug("waiting for device manager '%s' to return to '%s', current state is '%s'",
                                    self.address,
                                    repr(States.REGISTERED),
-                                   repr(self.implementation.state)
-                                   )
+                                   repr(self.implementation.state))
                     time.sleep(1)
                 else:
                     break
             else:
                 self.log.error("waiting for device manager '%s' to return to '%s' timed out",
                                self.address,
-                               repr(States.REGISTERED)
-                               )
+                               repr(States.REGISTERED))
                 return False
 
         return super(DeviceManager, self).stop(timeout=timeout)
@@ -331,7 +334,14 @@ class DeviceManagerImplementation(object):
         :type envelope: :class:`~c4.messaging.Envelope`
         :returns: response
         """
-        return callMessageHandler(self, envelope)
+        if self.state == States.RUNNING or envelope.Action in NOT_RUNNING_ACTIONS:
+            return callMessageHandler(self, envelope)
+        else:
+            error = "message with action '{action}' will not be handled because it is not allowed when the device is not in 'RUNNING' state, currently '{state}'".format(
+                action=envelope.Action,
+                state=self.state.name)
+            self.log.error(error)
+            return {"error": error}
 
     @property
     def state(self):
