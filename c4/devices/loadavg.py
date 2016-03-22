@@ -10,8 +10,8 @@ class LoadAvg(DeviceManagerImplementation):
     """
     LoadAvg devmgr
     """
-    def __init__(self, host, name, properties=None):
-        super(LoadAvg, self).__init__(host, name, properties=properties)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(LoadAvg, self).__init__(clusterInfo, name, properties=properties)
         # get number of CPUs and total number of cores
         self.numCPUs = 0
         self.totalCores = 0

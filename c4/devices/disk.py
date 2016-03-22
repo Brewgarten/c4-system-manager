@@ -15,8 +15,8 @@ class Disk(DeviceManagerImplementation):
     Calculates disk usage for each path.
     """
 
-    def __init__(self, host, name, properties=None):
-        super(Disk, self).__init__(host, name, properties=properties)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(Disk, self).__init__(clusterInfo, name, properties=properties)
         if properties is not None and "paths" in properties:
             self.paths = properties["paths"]
         else:

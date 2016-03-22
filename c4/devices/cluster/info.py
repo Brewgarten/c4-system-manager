@@ -11,8 +11,8 @@ class Info(DeviceManagerImplementation):
     state information of the cluster such that it can be queried from all
     nodes in the cluster.
     """
-    def __init__(self, host, name, properties=None):
-        super(Info, self).__init__(host, name, properties=properties)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(Info, self).__init__(clusterInfo, name, properties=properties)
         self.configuration = Configuration()
 
     @operation

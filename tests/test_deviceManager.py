@@ -4,7 +4,7 @@ import multiprocessing
 import pytest
 
 from c4.messaging import Router, RouterClient
-from c4.system.configuration import States
+from c4.system.configuration import States, DBClusterInfo, Roles
 from c4.system.deviceManager import (DeviceManager, DeviceManagerImplementation, DeviceManagerStatus,
                                      operation)
 from c4.system.messages import (LocalStartDeviceManager, LocalStopDeviceManager,
@@ -16,11 +16,14 @@ log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.usefixtures("temporaryIPCPath")
 
+@pytest.fixture
+def systemManagerClusterInfo():
+    return DBClusterInfo("test", "ipc://test.ipc", "ipc://test.ipc", role=Roles.ACTIVE, state=States.RUNNING)
 
 class SampleDeviceManager(DeviceManagerImplementation):
 
-    def __init__(self, node, name, properties=None):
-        super(SampleDeviceManager, self).__init__(node, name, properties=None)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(SampleDeviceManager, self).__init__(clusterInfo, name, properties=None)
         self.counter = multiprocessing.Value("i", 0)
 
     def handleStatus(self, message):
@@ -72,11 +75,11 @@ class TestDeviceManager(object):
         assert operations["request"]["optional"] == ["c"]
         assert operations["request"]["description"] == "Request test operation\n:param a: a\n:param b: b\n:param c: c\n:returns: argument dictionary"
 
-    def test_handleOperation(self):
+    def test_handleOperation(self, systemManagerClusterInfo):
 
         router = Router("test")  # @UnusedVariable
 
-        deviceManager = DeviceManager("test", "testDM", SampleDeviceManager)
+        deviceManager = DeviceManager(systemManagerClusterInfo, "testDM", SampleDeviceManager)
         assert deviceManager.start()
 
         client = RouterClient("test/testDM")
@@ -97,11 +100,11 @@ class TestDeviceManager(object):
         assert missingArgumentsResponse == {"error": "'request' is missing required arguments 'a,b'"}
         assert response == {"a": 1, "b": 2, "c": 3, "warning": "'request' has left over arguments '4'\n'request' has left over keyword arguments 'd'"}
 
-    def test_status(self):
+    def test_status(self, systemManagerClusterInfo):
 
         router = Router("test")  # @UnusedVariable
 
-        deviceManager = DeviceManager("test", "testDM", SampleDeviceManager)
+        deviceManager = DeviceManager(systemManagerClusterInfo, "testDM", SampleDeviceManager)
         assert deviceManager.start()
 
         client = RouterClient("test/testDM")
@@ -120,11 +123,11 @@ class TestDeviceManager(object):
         assert deviceManager.implementation.counter.value == 3
         assert deviceManager.implementation.state == States.REGISTERED
 
-    def test_stop(self):
+    def test_stop(self, systemManagerClusterInfo):
 
         router = Router("test")  # @UnusedVariable
 
-        deviceManager = DeviceManager("test", "testDM", SampleDeviceManager)
+        deviceManager = DeviceManager(systemManagerClusterInfo, "testDM", SampleDeviceManager)
         assert deviceManager.start()
 
         client = RouterClient("test/testDM")
@@ -135,11 +138,11 @@ class TestDeviceManager(object):
         assert startResponse["state"] == States.RUNNING
         assert deviceManager.implementation.state == States.REGISTERED
 
-    def test_stopWithoutStartMessage(self):
+    def test_stopWithoutStartMessage(self, systemManagerClusterInfo):
 
         router = Router("test")  # @UnusedVariable
 
-        deviceManager = DeviceManager("test", "testDM", SampleDeviceManager)
+        deviceManager = DeviceManager(systemManagerClusterInfo, "testDM", SampleDeviceManager)
         assert deviceManager.start()
 
         assert deviceManager.stop()

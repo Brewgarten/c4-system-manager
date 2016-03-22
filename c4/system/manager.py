@@ -42,22 +42,20 @@ class SystemManager(PeerRouter):
     """
     System Manager
 
-    :param node: node name
-    :type node: str
     :param clusterInfo: cluster information
     :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
     :param name: name
     :type name: str
     :raises MessagingException: if either external or internal system manager address is already in use
     """
-    def __init__(self, node, clusterInfo, name="SM"):
-        super(SystemManager, self).__init__(node, clusterInfo, name=name)
+    def __init__(self, clusterInfo, name="SM"):
+        super(SystemManager, self).__init__(clusterInfo.node, clusterInfo, name=name)
 
         # keep one message tracker for all implementations
         self.messageTracker = MessageTracker()
 
         # set up system manager implementation
-        self.implementation = SystemManagerImplementation(node, self.clusterInfo, self.messageTracker)
+        self.implementation = SystemManagerImplementation(self.clusterInfo, self.messageTracker)
 
         self.addHandler(self.implementation.routeMessage)
 
@@ -142,16 +140,13 @@ class SystemManagerImplementation(object):
     """
     System manager implementation which provides the handlers for messages.
 
-    :param node: node name
-    :type node: str
     :param clusterInfo: cluster information
     :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
     :param messageTracker: message tracker
     :type messageTracker: :class:`~c4.messaging.MessageTracker`
     """
-    def __init__(self, node, clusterInfo, messageTracker):
+    def __init__(self, clusterInfo, messageTracker):
         super(SystemManagerImplementation, self).__init__()
-        self.node = node
         self.clusterInfo = clusterInfo
         self.messageTracker = messageTracker
 
@@ -1229,6 +1224,15 @@ class SystemManagerImplementation(object):
             # FIXME: determine what to do here since we are not stopping the actual process
             pass
 
+    @property
+    def node(self):
+        """
+        Node name
+
+        :returns: str
+        """
+        return self.clusterInfo.node
+
     @classmethod
     def parseFrom(cls, from_str):
         """
@@ -1277,7 +1281,7 @@ class SystemManagerImplementation(object):
             if deviceInfo.type in deviceManagerImplementationMap:
                 try:
                     # create a new device manager instance
-                    deviceManager = DeviceManager(self.node,
+                    deviceManager = DeviceManager(self.clusterInfo,
                                                   fullDeviceName,
                                                   deviceManagerImplementationMap[deviceInfo.type],
                                                   deviceInfo.properties)
@@ -1400,7 +1404,7 @@ def main():
 
     # start system manager
     try:
-        systemManager = SystemManager(args.node, clusterInfo)
+        systemManager = SystemManager(clusterInfo)
         systemManager.run()
         return 0
     except MessagingException as e:

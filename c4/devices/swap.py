@@ -10,8 +10,8 @@ class Swap(DeviceManagerImplementation):
     """
     Swap devmgr
     """
-    def __init__(self, host, name, properties=None):
-        super(Swap, self).__init__(host, name, properties=properties)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(Swap, self).__init__(clusterInfo, name, properties=properties)
 
     def calculateSwapUsage(self):
         """

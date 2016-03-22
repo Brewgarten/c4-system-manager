@@ -64,11 +64,11 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
 
     systemSetup = {}
     node1ClusterInfo = DBClusterInfo("rack1-master1", "tcp://127.0.0.1:5000", "tcp://127.0.0.1:5000", role=Roles.ACTIVE)
-    systemSetup["rack1-master1"] = SystemManager("rack1-master1", node1ClusterInfo)
+    systemSetup["rack1-master1"] = SystemManager(node1ClusterInfo)
     node2ClusterInfo = DBClusterInfo("rack1-master2", "tcp://127.0.0.1:6000", "tcp://127.0.0.1:5000", role=Roles.PASSIVE)
-    systemSetup["rack1-master2"] = SystemManager("rack1-master2", node2ClusterInfo)
+    systemSetup["rack1-master2"] = SystemManager(node2ClusterInfo)
     node3ClusterInfo = DBClusterInfo("rack1-master3", "tcp://127.0.0.1:7000", "tcp://127.0.0.1:5000")
-    systemSetup["rack1-master3"] = SystemManager("rack1-master3", node3ClusterInfo)
+    systemSetup["rack1-master3"] = SystemManager(node3ClusterInfo)
 
     def systemTeardown():
         log.debug("clean up")

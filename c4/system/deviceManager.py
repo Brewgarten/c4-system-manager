@@ -107,8 +107,8 @@ class DeviceManager(DealerRouter):
     """
     Device Manager
 
-    :param node: node name
-    :type node: str
+    :param clusterInfo: cluster information
+    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
     :param name: name
     :type name: str
     :param implementation: implementation of handlers
@@ -117,25 +117,26 @@ class DeviceManager(DealerRouter):
     :type properties: dict
     :raises MessagingException: if either parent device manager is not set up or device manager address is already in use
     """
-    def __init__(self, node, name, implementation, properties=None):
+    def __init__(self, clusterInfo, name, implementation, properties=None):
         addressParts = name.split("/")
-        addressParts.insert(0, node)
+        addressParts.insert(0, clusterInfo.node)
         routerAddress = "/".join(addressParts[:-1])
         address = "/".join(addressParts)
         super(DeviceManager, self).__init__(routerAddress, address, register=True, name="DM")
+        self.clusterInfo = clusterInfo
 
         # set up device manager implementation
-        self.implementation = implementation(node, name, properties)
+        self.implementation = implementation(self.clusterInfo, name, properties)
         self.addHandler(self.implementation.routeMessage)
 
     @property
     def node(self):
         """
-        Get node name
+        Node name
 
         :returns: str
         """
-        return self.implementation.node
+        return self.clusterInfo.node
 
     def start(self, timeout=60):
         """
@@ -191,16 +192,16 @@ class DeviceManagerImplementation(object):
     """
     Device manager implementation which provides the handlers for messages.
 
-    :param node: node name
-    :type node: str
+    :param clusterInfo: cluster information
+    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
     :param name: name
     :type name: str
     :param properties: optional properties
     :type properties: dict
     """
-    def __init__(self, node, name, properties=None):
+    def __init__(self, clusterInfo, name, properties=None):
         super(DeviceManagerImplementation, self).__init__()
-        self.node = node
+        self.clusterInfo = clusterInfo
         self.name = name
         if properties is None:
             self.properties = {}
@@ -222,6 +223,15 @@ class DeviceManagerImplementation(object):
             if hasattr(method, "operation")
         }
         return operations
+
+    @property
+    def node(self):
+        """
+        Node name
+
+        :returns: str
+        """
+        return self.clusterInfo.node
 
     def handleLocalStartDeviceManager(self, message, envelope):
         """

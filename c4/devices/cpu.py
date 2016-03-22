@@ -13,8 +13,8 @@ class Cpu(DeviceManagerImplementation):
     IDLE_INDEX = 3  # index of "idle cpu" from /proc/stat
     WAIT_INDEX = 4  # index of "wait cpu" from /proc/stat
 
-    def __init__(self, host, name, properties=None):
-        super(Cpu, self).__init__(host, name, properties)
+    def __init__(self, clusterInfo, name, properties=None):
+        super(Cpu, self).__init__(clusterInfo, name, properties)
         self.prev_cpu_idle = 0.0
         self.prev_cpu_wait = 0.0
         self.prev_cpu_total = 0.0
