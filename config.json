@@ -46,16 +46,8 @@
     },
     "platform": {
         "@class": "c4.system.configuration.PlatformInfo",
-        "historyLimit": 10000,
         "name": "dev",
         "settings": {
-            "policy_timer_interval": 5000,
-            "register_timer_interval": 3000,
-			"rest_listen_address": "",
-			"rest_port": 8443,
-			"ssl_certificate_file": "ssl.crt",
-			"ssl_enabled": true,
-			"ssl_key_file": "ssl.key"
         },
         "type": "c4.system.platforms.dev.Dev"
     }

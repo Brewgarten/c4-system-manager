@@ -5,6 +5,9 @@ import datetime
 import imp
 import logging
 import multiprocessing
+import os
+import re
+import signal
 import socket
 import sys
 import time
@@ -91,14 +94,18 @@ class SystemManager(PeerRouter):
 
         # wait for state change to registered
         end = time.time() + 60
-        while time.time() < end:
-            if self.clusterInfo.state == States.REGISTERING:
-                client.forwardMessage(envelope)
-                time.sleep(1)
+        try:
+            while time.time() < end:
+                if self.clusterInfo.state == States.REGISTERING:
+                    client.forwardMessage(envelope)
+                    time.sleep(1)
+                else:
+                    break
             else:
-                break
-        else:
-            self.log.error("registering '%s' timed out", self.address)
+                self.log.error("registering '%s' timed out", self.address)
+                return False
+        except KeyboardInterrupt:
+            self.log.info("terminating registration for '%s'", self.address)
             return False
 
         return True
@@ -1353,51 +1360,76 @@ def main():
     """
     logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s:%(process)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
 
+    currentNodeName = platformSpec.node().split(".")[0]
+
     # parse command line arguments
     parser = argparse.ArgumentParser(description="C4 system manager")
-    parser.add_argument("-s", "--sm-addr", action="store", dest="sm_addr", help="Address of the active system manager.  The system manager will start up as a thin node.")
-    parser.add_argument("-v", "--verbose", action="count", help="Displays more log information")
-    parser.add_argument("-n", "--node", action="store", help="Node name for this system manager.  Must match a node in the bill of materials (i.e. bom.json).")
-    parser.add_argument("-p", "--port", action="store", help="The port to use for routing of messages")
-    parser.add_argument("-b", "--bom", action="store", help="BOM file name")
-    parser.add_argument("-f", "--force", action="store_true", help="Loads from the configuration file, regardless of whether the configuration tables are empty or not.")
-    parser.set_defaults(node=platformSpec.node(),
-                        port="5000",
-                        bom="bom.json")
+
+    parentParser = argparse.ArgumentParser(add_help=False)
+    parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
+    parentParser.add_argument("-n", "--node", action="store", default=currentNodeName, help="Node name for this system manager")
+    parentParser.add_argument("-p", "--port", action="store", dest="node_port", type=int, default=5000, help="Port for this system manager")
+
+    commandParser = parser.add_subparsers(dest="command")
+
+    runParser = commandParser.add_parser("run", help="Start this system manager as an active node and continue to run in the foreground", parents=[parentParser])
+    runParser.add_argument("-c", "--config", action="store", help="Configuration file name")
+    runParser.add_argument("-f", "--force", action="store_true", help="Loads from the configuration file, regardless of whether the configuration tables are empty or not.")
+
+    joinParser = commandParser.add_parser("join", help="Join an existing cluster of system managers by starting this system manager as a thin node that connects to the active system manager", parents=[parentParser])
+    joinParser.add_argument("address", action="store", help="Address of the active system manager")
 
     args = parser.parse_args()
 
-    # TODO: we need to have more distinguished levels for this
-    if args.verbose >= 1:
-        logging.root.setLevel(logging.DEBUG)
+    if args.verbose > 0:
         log.setLevel(logging.DEBUG)
+        logging.getLogger("c4.system.deviceManager.DeviceManager").setLevel(logging.INFO)
+        logging.getLogger("c4.system.deviceManager.DeviceManagerImplementation").setLevel(logging.DEBUG)
+        logging.getLogger("c4.system.manager.SystemManager").setLevel(logging.INFO)
+        logging.getLogger("c4.system.manager.SystemManagerImplementation").setLevel(logging.DEBUG)
+    if args.verbose > 1:
+        logging.getLogger("c4.system.deviceManager.DeviceManager").setLevel(logging.DEBUG)
+        logging.getLogger("c4.system.manager.SystemManager").setLevel(logging.DEBUG)
+    if args.verbose > 2:
+        logging.getLogger("c4.messaging").setLevel(logging.DEBUG)
+    if args.verbose > 3:
+        logging.getLogger("c4.system.db").setLevel(logging.DEBUG)
 
-    # if active system manager address is supplied,
-    # then we are a thin system manager
-    if args.sm_addr:
+    if args.command == "join":
+
+        # if active system manager address is supplied then we start as a thin system manager
         log.info("System manager information provided. Continuing as a thin node")
-        clusterInfo = DBClusterInfo(args.node,
-                        "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.port),
-                        args.sm_addr, Roles.THIN)
-    # load configuration from the database
-    # if empty, then load from bom.json
-    elif args.bom:
+        if re.search(r"tcp://(?P<ip>(\d+\.\d+\.\d+\.\d+)):(?P<port>\d+)", args.address):
+            clusterInfo = DBClusterInfo(args.node,
+                                        "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.node_port),
+                                        args.address,
+                                        Roles.THIN)
+        else:
+            log.error("'%s' is an invalid address for a system manager, expected 'tcp://ip:port'", args.address)
+            return 1
+
+    elif args.command == "run":
+
         try:
             configuration = Configuration()
-            # if database is empty, then load from bom.json
-            if len(configuration.getNodeNames()) == 0 or args.force:
+            if not configuration.getNodeNames() or args.force:
+                # if database is empty, then load from config file
+                if not args.config:
+                    log.error("configuration database is empty but no config file is specified")
+                    return 1
                 if not args.force:
-                    log.debug("Configuration database is empty.  Loading from config file %s", args.bom)
+                    log.warn("Configuration database is empty. Loading from config file '%s'", args.config)
+                configInfo = ConfigurationInfo.fromJSONFile(args.config)
                 configuration.clear()
-                configuration.loadFromInfo(ConfigurationInfo.fromJSONFile(args.bom))
-            # else database not empty
-            # set all devices to REGISTERED unless their states are MAINTENTANCE or UNDEPLOYED
+                configuration.loadFromInfo(configInfo)
             else:
+                # else database not empty
+                # set all devices to REGISTERED unless their states are MAINTENTANCE or UNDEPLOYED
                 configuration.resetDeviceStates()
 
             # validate node (hostname) matches configuration
             if args.node not in configuration.getNodeNames():
-                log.error("Current node name (%s) not found in configuration" % args.node)
+                log.error("Current node name '%s' not found in configuration", args.node)
                 return 1
 
             clusterInfo = DBClusterInfo(args.node,
@@ -1405,23 +1437,51 @@ def main():
                                         configuration.getAddress("system-manager"),
                                         configuration.getNode(args.node, includeDevices=False).role)
 
-        except Exception, e:
-            log.error("Error in %s", args.bom)
+        except Exception as e:
+            log.error("Error in '%s'", args.config)
             log.error(e)
             return 1
-    # will never get here
-    else:
-        log.error("Please provide either a configuration file or the address of the active system manager")
-        return 1
 
-    # start system manager
     try:
         systemManager = SystemManager(clusterInfo)
-        systemManager.run()
-        return 0
     except MessagingException as e:
-        log.error("Could not set up System Manager: %s", e)
+        log.error("Could not set up system manager '%s'", e)
         return 1
+
+    stopFlag = multiprocessing.Event()
+
+    # adjust interrupt signal handler such that we can shut down cleanly
+    # this means ignoring all sigints except when in the system manager
+    originalInterruptHandler = signal.getsignal(signal.SIGINT)
+    def interruptHandler(signum, frame):
+        if "systemManager" in frame.f_locals:
+            # we are a running system manager
+            log.info("system manager received interrupt signal")
+            # restore original interrupt signal handler
+            signal.signal(signal.SIGINT, originalInterruptHandler)
+            # stop system manager
+            stopFlag.set()
+        elif isinstance(frame.f_locals.get("self", None), SystemManager):
+            # we are still starting the system manager
+            log.info("system manager received interrupt signal during start")
+            # restore original interrupt signal handler
+            signal.signal(signal.SIGINT, originalInterruptHandler)
+            # stop system manager
+            stopFlag.set()
+            # propagate interrupt back up to start method
+            os.kill(os.getpid(), signal.SIGINT)
+        else:
+            # ignore interrupt signal
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, interruptHandler)
+
+    started = systemManager.start()
+    if started:
+        # note that we need to loop here because wait will not allow us to catch the interrupt
+        while not stopFlag.is_set():
+            time.sleep(1)
+    systemManager.stop()
+    return 0
 
 if __name__ == '__main__':
     sys.exit(main())
