@@ -11,14 +11,14 @@ from c4.devices.mem import Memory
 from c4.devices.swap import Swap
 
 from c4.system.deviceManager import DeviceManagerStatus
-from c4.system.configuration import DBClusterInfo, Roles, States
+from c4.system.configuration import Roles, States
 
 log = logging.getLogger(__name__)
 logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
 
 @pytest.fixture
-def systemManagerClusterInfo():
-    return DBClusterInfo("localhost", "ipc://localhost.ipc", "ipc://localhost.ipc", role=Roles.ACTIVE, state=States.RUNNING)
+def systemManagerClusterInfo(temporaryBackend):
+    return temporaryBackend.ClusterInfo("localhost", "ipc://localhost.ipc", "ipc://localhost.ipc", Roles.ACTIVE, States.RUNNING)
 
 def pytest_generate_tests(metafunc):
     if "implementation" in metafunc.fixturenames and "statusMethod" in metafunc.fixturenames:

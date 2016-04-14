@@ -1,4 +1,4 @@
-from c4.system.configuration import Configuration
+from c4.system.backend import Backend
 from c4.system.deviceManager import (DeviceManagerImplementation, DeviceManagerStatus,
                                      operation)
 from c4.utils.logutil import ClassLogger
@@ -13,7 +13,6 @@ class Info(DeviceManagerImplementation):
     """
     def __init__(self, clusterInfo, name, properties=None):
         super(Info, self).__init__(clusterInfo, name, properties=properties)
-        self.configuration = Configuration()
 
     @operation
     def getNode(self, node, includeDevices=True, flatDeviceHierarchy=False):
@@ -29,16 +28,16 @@ class Info(DeviceManagerImplementation):
         :returns: node
         :rtype: :class:`~c4.system.configuration.NodeInfo`
         """
-        return self.configuration.getNode(node,
-                                          includeDevices=includeDevices,
-                                          flatDeviceHierarchy=flatDeviceHierarchy)
+        return Backend().configuration.getNode(node,
+                                               includeDevices=includeDevices,
+                                               flatDeviceHierarchy=flatDeviceHierarchy)
 
     @operation
     def getNodeNames(self):
         """
         Return a list of node names.
         """
-        return self.configuration.getNodeNames()
+        return Backend().configuration.getNodeNames()
 
     @operation
     def getSystemManagerNodeName(self):
@@ -48,7 +47,7 @@ class Info(DeviceManagerImplementation):
         :returns: node name
         :rtype: str
         """
-        return self.configuration.getSystemManagerNodeName()
+        return Backend().configuration.getSystemManagerNodeName()
 
     def handleStatus(self, message):
         """

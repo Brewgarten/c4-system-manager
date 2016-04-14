@@ -113,7 +113,7 @@ class DeviceManager(DealerRouter):
     Device Manager
 
     :param clusterInfo: cluster information
-    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
+    :type clusterInfo: :class:`~c4.system.configuration.ClusterInfo`
     :param name: name
     :type name: str
     :param implementation: implementation of handlers
@@ -196,7 +196,7 @@ class DeviceManagerImplementation(object):
     Device manager implementation which provides the handlers for messages.
 
     :param clusterInfo: cluster information
-    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
+    :type clusterInfo: :class:`~c4.system.configuration.ClusterInfo`
     :param name: name
     :type name: str
     :param properties: optional properties

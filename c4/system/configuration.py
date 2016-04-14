@@ -1,13 +1,14 @@
 import ctypes
 import logging
 import multiprocessing
-import json
 
 from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 from c4.utils.version import BasicVersion
-from c4.system.db import DBManager
+from c4.system.backend import Backend
+from abc import ABCMeta, abstractmethod
+
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +50,13 @@ class States(Enum):
     RUNNING = "running"
 
 @ClassLogger
-class Configuration():
+class Configuration(object):
     """
     System configuration interface
     """
-    def __init__(self):
-        self.database = DBManager()
+    __metaclass__ = ABCMeta
 
+    @abstractmethod
     def addAlias(self, alias, node):
         """
         Add an alias for a node.
@@ -67,25 +68,11 @@ class Configuration():
         :returns: alias
         :rtype: str
         """
-        # check if node exists
-        rows = self.database.query("""
-            select name from t_sm_configuration
-            where parent_id is null and name is ?""", (node,))
-        if not rows:
-            self.log.error("could not add alias '%s' because node '%s' does not exist", alias, node)
-            return None
-        # attempt to add alias for the node
-        inserted = self.database.writeCommit("""
-            insert into t_sm_configuration_alias (alias, node_name) values (?, ?)""",
-            (alias, node))
-        if inserted < 1:
-            self.log.error("'%s' is already an alias", alias)
-            return None
-        return alias
 
+    @abstractmethod
     def addDevice(self, node, fullDeviceName, device):
         """
-        Adds a device to the configuration db. Throws exception on error.
+        Adds a device to the configuration. Throws exception on error.
 
         :param node: node name
         :type node: str
@@ -93,53 +80,11 @@ class Configuration():
         :type fullDeviceName: str
         :param device: device
         :type device: :class:`~c4.system.configuration.DeviceInfo`
-        :returns: device info with database ids
+        :returns: device info with ids
         :rtype: :class:`~c4.system.configuration.DeviceInfo`
-
         """
-        nodeInfo = self.getNode(node)
-        if nodeInfo is None:
-            self.log.error("could not add device '%s' because node '%s' does not exist", fullDeviceName, node)
-            return None
 
-        deviceParts = fullDeviceName.split(".")
-        # delete the last part of the name because that is the device that we want to add
-        deviceParts.pop()
-        # go through the hierarchy and get each device id
-        # we want the last id of the hierarchy
-        parentId = nodeInfo.id
-        existingDevices = nodeInfo.devices
-        for devicePart in deviceParts:
-
-            if devicePart not in existingDevices:
-                self.log.error("unable to add device because device parent '%s' not found for node '%s'", devicePart, node)
-                return None
-            parentId = existingDevices[devicePart].id
-            existingDevices = existingDevices[devicePart].devices
-
-        if device.name in existingDevices:
-            self.log.error("unable to add device because device '%s' already exists for node '%s'", device.name, node)
-            return None
-
-        self.database.writeCommit("""
-            insert into t_sm_configuration (parent_id, name, state, type, details)
-            values (?, ?, ?, ?, ?)""",
-            (parentId, device.name, device.state.name, device.type, json.dumps(device.details)))
-        # get the id of the last configuration record
-        rows = self.database.query("select id from t_sm_configuration where parent_id is ? and name = ?",
-            (parentId, device.name))
-        device.id = rows[0]["id"]
-        device.parentId = parentId
-
-        # save child devices
-        childDevices = device.devices.values()
-        for childDevice in childDevices:
-            dbDevice = self.addDevice(node, "{0}.{1}".format(fullDeviceName, childDevice.name), childDevice)
-            if dbDevice:
-                device.devices[childDevice.name] = dbDevice
-
-        return device
-
+    @abstractmethod
     def addNode(self, node):
         """
         Add node
@@ -149,26 +94,8 @@ class Configuration():
         :returns: node info with database ids
         :rtype: :class:`~c4.system.configuration.NodeInfo`
         """
-        nodeInfo = self.getNode(node.name, includeDevices=False)
-        if nodeInfo:
-            self.log.error("node '%s' already exists", node.name)
-            return None
 
-        self.database.writeCommit("""
-            insert into t_sm_configuration (name, state, type, details)
-            values (?, ?, ?, ?)""",
-            (node.name, node.state.name, "c4.system.manager.SystemManager", json.dumps(node.details)))
-        nodeInfo = self.getNode(node.name, includeDevices=False)
-
-        # save child devices
-        childDevices = node.devices.values()
-        for childDevice in childDevices:
-            dbDevice = self.addDevice(node.name, childDevice.name, childDevice)
-            if dbDevice:
-                nodeInfo.devices[childDevice.name] = dbDevice
-
-        return nodeInfo
-
+    @abstractmethod
     def addPlatform(self, platform):
         """
         Add platform information
@@ -176,27 +103,14 @@ class Configuration():
         :param platform: platform
         :type platform: :class:`~c4.system.configuration.PlatformInfo`
         """
-        self.database.write("begin")
-        self.database.write("delete from t_sm_platform")
-        self.database.writeMany("""
-            insert into t_sm_platform (property, value) values (?, ?)""",
-            ("name", platform.name),
-            ("type", platform.type),
-            ("description", platform.description),
-            ("settings", json.dumps(platform.settings))
-        )
-        self.database.write("commit")
 
+    @abstractmethod
     def clear(self):
         """
         Removes all nodes and devices from the configuration object and the database.
         """
-        self.database.write("begin")
-        self.database.write("delete from t_sm_configuration")
-        self.database.write("delete from t_sm_configuration_alias")
-        self.database.write("delete from t_sm_platform")
-        self.database.write("commit")
 
+    @abstractmethod
     def changeAlias(self, alias, node):
         """
         Change the node an alias refers to
@@ -208,48 +122,8 @@ class Configuration():
         :returns: alias
         :rtype: str
         """
-        # check if node exists
-        rows = self.database.query("""
-            select name from t_sm_configuration
-            where parent_id is null and name is ?""", (node,))
-        if not rows:
-            self.log.error("could not change alias '%s' because node '%s' does not exist", alias, node)
-            return None
-        # attempt to change alias to the node
-        updated = self.database.writeCommit("update t_sm_configuration_alias set node_name=? where alias=?", (node, alias))
-        if updated < 1:
-            self.log.error("alias '%s' does not exist", alias)
-            return None
-        return alias
 
-    def changeDetail(self, node, name, detail, value, setIfNotExist=False):
-        """
-        Change detail property of a system or device manager to the specified value
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :param detail: detail property
-        :type detail: str
-        :param value: detail value
-        :type value: str
-        :returns: previous value
-        """
-        rowId, details = self.getDetails(node, name)
-        if rowId < 0:
-            return None
-        if detail not in details and not setIfNotExist:
-            self.log.error("detail '%s' of '%s/%s' does not exist", detail, node, name)
-            return None
-        previousValue = details.get(detail, None)
-        details[detail] = value
-        updated = self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
-        if updated < 1:
-            self.log.error("could not change detail '%s' of '%s/%s' to '%s'", detail, node, name, value)
-            return None
-        return previousValue
-
+    @abstractmethod
     def changeRole(self, node, role):
         """
         Change role of a system manager
@@ -269,6 +143,7 @@ class Configuration():
             return None
         return Roles.valueOf(roleName)
 
+    @abstractmethod
     def changeState(self, node, name, state):
         """
         Change state of a system or device manager
@@ -282,53 +157,8 @@ class Configuration():
         :returns: previous state
         :rtype: :class:`States`
         """
-        if not isinstance(state, States):
-            self.log.error("'%s' does not match enum of type '%s'", state, States)
-            return None
-        try:
-            if name:
-                deviceInfo = self.getDevice(node, name)
 
-                if deviceInfo is None:
-                    self.log.error("could not change state of '%s/%s' to '%s' because it does not exist", node, name, state)
-                    return None
-
-                previousState = deviceInfo.state
-                self.database.writeCommit("""
-                    update t_sm_configuration set state = ? where id is ?""",
-                    (state.name, deviceInfo.id))
-
-            else:
-                if state == States.REGISTERED or state == States.MAINTENANCE:
-                    nodeInfo = self.getNode(node, flatDeviceHierarchy=True)
-                else:
-                    nodeInfo = self.getNode(node, includeDevices=False)
-
-                if nodeInfo is None:
-                    self.log.error("could not change state of '%s' to '%s' because node does not exist", node, state)
-                    return None
-
-                previousState = nodeInfo.state
-                self.database.writeCommit("""
-                    update t_sm_configuration set state = ? where id is ?""",
-                    (state.name, nodeInfo.id))
-
-                # handle special cases
-                if state == States.REGISTERED or state == States.MAINTENANCE:
-
-                    deviceList = sorted(nodeInfo.devices.values())
-                    # note that we do not automatically change the state of children if they are in Maintenance mode
-                    self.database.writeMany("""
-                        update t_sm_configuration set state = ? where id is ? and state is not 'MAINTENANCE'""",
-                        *[(state.name, device.id) for device in deviceList])
-
-            self.log.debug("changed state of '%s%s' from '%s' to '%s'", node, "/" + name if name else "", previousState, state.name)
-            return previousState
-
-        except Exception as e:
-            self.log.error("could not change state of '%s%s' to '%s': %s", node, "/" + name if name else "", state, e)
-            return None
-
+    @abstractmethod
     def changeTargetState(self, node, name, state):
         """
         Change target state of a system or device manager
@@ -342,13 +172,6 @@ class Configuration():
         :returns: previous target state
         :rtype state: :class:`States`
         """
-        if not isinstance(state, States):
-            self.log.error("'%s' does not match enum of type '%s'", state, States)
-            return
-        stateName = self.changeDetail(node, name, "targetState", state.name, setIfNotExist=True)
-        if not stateName:
-            return None
-        return States.valueOf(stateName)
 
     def getAddress(self, node):
         """
@@ -378,6 +201,7 @@ class Configuration():
             return None
         return info.address
 
+    @abstractmethod
     def getAliases(self):
         """
         Get a mapping of aliases to node names
@@ -385,46 +209,6 @@ class Configuration():
         :returns: mappings
         :rtype: dict
         """
-        rows = self.database.query("select alias, node_name from t_sm_configuration_alias")
-        return {row["alias"]: row["node_name"] for row in rows}
-
-    def getDetail(self, node, name, detail):
-        """
-        Get the detail property of a system or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :param detail: detail property
-        :type detail: str
-        :returns: str
-        """
-        rowId, details = self.getDetails(node, name)
-        if rowId < 0:
-            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
-        return details.get(detail)
-
-    def getDetails(self, node, name=None):
-        """
-        Get the details of a system or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :returns: (id, dict)
-        :rtype: tuple
-        """
-        if name:
-            info = self.getDevice(node, name)
-        else:
-            info = self.getNode(node, includeDevices=False)
-
-        if info is None:
-            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
-            return (-1, {})
-        return (info.id, info.details)
 
     def getDevice(self, node, fullDeviceName):
         """
@@ -471,6 +255,7 @@ class Configuration():
             return {}
         return nodeInfo.devices
 
+    @abstractmethod
     def getPlatform(self):
         """
         Get platform information
@@ -478,16 +263,6 @@ class Configuration():
         :returns: platform
         :rtype: :class:`~c4.system.configuration.PlatformInfo`
         """
-        rows = self.database.query("select property, value from t_sm_platform")
-        data = {}
-        for row in rows:
-            data[row["property"]] = row["value"]
-        return PlatformInfo(
-            data.get("name", "unknown"),
-            data.get("type", "c4.system.platforms.Unknown"),
-            data.get("description", ""),
-            json.loads(data.get("settings", "{}"))
-        )
 
     def getRole(self, node):
         """
@@ -534,6 +309,7 @@ class Configuration():
         """
         return self.resolveAlias("system-manager")
 
+    @abstractmethod
     def getTargetState(self, node, name=None):
         """
         Get the target state of a node or device manager.
@@ -544,11 +320,8 @@ class Configuration():
         :type name: str
         :returns: :class:`~c4.system.configuration.States`
         """
-        state = self.getDetail(node, name, "targetState");
-        if state is None:
-            return None
-        return States.valueOf(state)
 
+    @abstractmethod
     def getNode(self, node, includeDevices=True, flatDeviceHierarchy=False):
         """
         Get node information for the specified system manager
@@ -562,118 +335,12 @@ class Configuration():
         :returns: node
         :rtype: :class:`~c4.system.configuration.NodeInfo`
         """
-        try:
-            if includeDevices:
-                import c4.system.db
-                if BasicVersion(c4.system.db.sqlite3.sqlite_version) < SqliteCTEMinimumVersion:
-                    # For versions of sqlite without common table expressions it is necessary to
-                    # emulate a hierarchical query
 
-                    # Start from the system manager
-                    frontier = self.database.query("""
-                                select id, 0, name, state, type, details, parent_id
-                                from t_sm_configuration
-                                where parent_id is null and name is ?""", (node,))
-                    if len(frontier) == 0:
-                        raise Exception("Invalid name for system manager")
-                    rows = []
-                    while len(frontier) > 0:
-                        visiting = frontier.pop(0)
-                        rows.append(visiting)
-                        # Add the children of current device
-                        frontier.extend(self.database.query("""
-                                            select t.id as id, 
-                                                   ? as level,
-                                                   ? || "." || t.name as name,
-                                                   t.state as state,
-                                                   t.type as type, 
-                                                   t.details as details,
-                                                   t.parent_id as parent_id
-                                            from t_sm_configuration as t
-                                            where parent_id = ?""", (visiting[1]+1, visiting["name"], visiting["id"])))
-                else:
-                    rows = self.database.query("""
-                        with recursive
-                            configuration(id, level, name, state, type, details, parent_id) as (
-                                select id, 0, name, state, type, details, parent_id
-                                from t_sm_configuration
-                                where parent_id is null and name is ?
-                                union all
-                                select t.id, configuration.level+1, configuration.name || "." || t.name, t.state, t.type, t.details, t.parent_id
-                                from t_sm_configuration as t join configuration on t.parent_id=configuration.id
-                             order by 2 desc
-                            )
-                        select * from configuration;""", (node,))
-            else:
-                rows = self.database.query("""
-                    select * from t_sm_configuration
-                    where parent_id is null and name is ?""", (node,))
-
-            if not rows:
-                return None
-
-            # deal with node information
-            nodeRow = rows.pop(0)
-            nodeDetailsJSON = nodeRow["details"]
-            nodeDetails = json.loads(nodeDetailsJSON)
-            nodeRole = Roles.valueOf(nodeDetails["role"])
-            nodeState = States.valueOf(nodeRow["state"])
-            nodeInfo = NodeInfo(nodeRow["name"], nodeDetails["address"], nodeRole, nodeState, nodeRow["id"])
-            nodeInfo.details = nodeDetails
-
-            if rows:
-
-                if not flatDeviceHierarchy:
-                    root = NodeInfo("root", None)
-                    root.devices[nodeRow["name"]] = nodeInfo
-
-                for row in rows:
-
-                    # split fully qualified name into path and name
-                    currentPath = row["name"].split(".")
-
-                    detailsJSON = row["details"]
-                    details = json.loads(detailsJSON)
-
-                    if flatDeviceHierarchy:
-
-                        # strip node name from device name
-                        currentPath.pop(0)
-                        deviceName = ".".join(currentPath)
-
-                        # create device information
-                        deviceInfo = DeviceInfo(deviceName, row["type"], States.valueOf(row["state"]), row["id"], row["parent_id"])
-                        deviceInfo.details = details
-                        nodeInfo.devices[deviceName] = deviceInfo
-
-                    else:
-                        # create device information
-                        name = currentPath.pop()
-                        deviceInfo = DeviceInfo(name, row["type"], States.valueOf(row["state"]), row["id"], row["parent_id"])
-                        deviceInfo.details = details
-
-                        # traverse path to parent
-                        currentDeviceInfo = root
-                        for pathElement in currentPath:
-                            currentDeviceInfo = currentDeviceInfo.devices[pathElement]
-                        currentDeviceInfo.addDevice(deviceInfo)
-
-            return nodeInfo
-
-        except Exception as e:
-            import traceback
-            self.log.error(traceback.format_exc())
-            self.log.error("could not get node info for '%s': '%s'", node, e)
-            return None
-
+    @abstractmethod
     def getNodeNames(self):
         """
         Return a list of node names.
         """
-        rows = self.database.query("""
-            select name from t_sm_configuration
-            where parent_id is null""")
-        return [row["name"] for row in rows]
 
     def loadFromInfo(self, configurationInfo):
         """
@@ -690,24 +357,7 @@ class Configuration():
             self.addAlias(alias, nodeName)
         self.addPlatform(configurationInfo.platform)
 
-    def removeDetail(self, node, name, detail):
-        """
-        Remove detail property from a system or device manager
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :param detail: detail property
-        :type detail: str
-        """
-        rowId, details = self.getDetails(node, name)
-        if detail in details:
-            del details[detail]
-            self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
-        else:
-            self.log.error("could not remove '%s' from '%s/%s' because it detail does not exist", detail, node, name)
-
+    @abstractmethod
     def removeDevice(self, node, fullDeviceName):
         """
         Remove a device from the configuration
@@ -717,17 +367,8 @@ class Configuration():
         :param fullDeviceName: fully qualified device name
         :type fullDeviceName: str
         """
-        devices = self.getDevices(node, flatDeviceHierarchy=True)
 
-        # get matching device and its children
-        rowIds = sorted([(device.id,) for device in devices.values() if device.name.startswith(fullDeviceName)])
-        if rowIds:
-            self.database.writeMany("""
-                delete from t_sm_configuration where id is ?""",
-                *rowIds)
-        else:
-            self.log.error("could not remove '%s' from '%s' because it does not exist", fullDeviceName, node)
-
+    @abstractmethod
     def removeNode(self, node):
         """
         Remove node from the configuration
@@ -735,23 +376,8 @@ class Configuration():
         :param node: node name
         :type node: str
         """
-        nodeInfo = self.getNode(node, flatDeviceHierarchy=True)
-        if nodeInfo is None:
-            self.log.error("could not remove '%s' because it does not exist", node)
-            return
 
-        rowIds = [(nodeInfo.id,)]
-        rowIds.extend([(device.id,) for device in nodeInfo.devices.values()])
-        rowIds = sorted(rowIds)
-        self.database.writeMany("""
-            delete from t_sm_configuration where id is ?""",
-            *rowIds)
-
-        # remove aliases for node
-        self.database.writeCommit("""
-            delete from t_sm_configuration_alias where node_name=?""",
-            (node,))
-
+    @abstractmethod
     def removeTargetState(self, node, name=None):
         """
         Remove target state from a system or device manager
@@ -761,21 +387,15 @@ class Configuration():
         :param name: device manager name
         :type name: str
         """
-        self.removeDetail(node, name, "targetState")
 
+    @abstractmethod
     def resetDeviceStates(self):
         """
         Sets the states of all devices to REGISTERED unless their state is
         MAINTENANCE or UNDEPLOYED.
         """
-        self.database.writeCommit("""
-            update t_sm_configuration set state = ?
-            where parent_id is not null
-            and state is not 'MAINTENANCE'
-            and state is not 'REGISTERED'
-            and state is not 'UNDEPLOYED'""",
-            (States.REGISTERED.name,))
 
+    @abstractmethod
     def resolveAlias(self, alias):
         """
         Get node name for the specified alias
@@ -922,6 +542,7 @@ class ConfigurationTooManyActiveNodesError(ConfigurationValidationError):
         super(ConfigurationTooManyActiveNodesError, self).__init__(
             "too many active nodes '{0}' specified".format(" ".join(activeNodes)))
 
+# TODO: remove or move into separate backend implementation
 @ClassLogger
 class DBClusterInfo(object):
     """
@@ -952,7 +573,7 @@ class DBClusterInfo(object):
         Alias mappings
         """
         if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-            return Configuration().getAliases()
+            return Backend().configuration.getAliases()
         else:
             return {}
 
@@ -965,7 +586,7 @@ class DBClusterInfo(object):
         :returns: str or ``None`` if not found
         """
         if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-            return Configuration().getAddress(node)
+            return Backend().configuration.getAddress(node)
         else:
             if node == "system-manager":
                 return self._systemManagerAddress.value
@@ -980,7 +601,7 @@ class DBClusterInfo(object):
         Names of the nodes in the cluster
         """
         if self.role == Roles.ACTIVE or self.role == Roles.PASSIVE:
-            return Configuration().getNodeNames()
+            return Backend().configuration.getNodeNames()
         else:
             return [self.node, "system-manager"]
 
@@ -1257,3 +878,97 @@ class PlatformInfo(JSONSerializable):
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+# TODO: need to make ClusterInfo more abstract and then have the specific implementation inherit properly
+@ClassLogger
+class SharedClusterInfo(object):
+    """
+    A basic cluster information object backed by a shared configuration
+
+    :param backend: backend implementation
+    :type backend: :class:`~BackendImplementation`
+    :param node: node
+    :type node: str
+    :param address: address of the node
+    :type address: str
+    :param systemManagerAddress: address of the active system manager
+    :type systemManagerAddress: str
+    :param role: role of the node
+    :type role: :class:`Roles`
+    :param state: state of the node
+    :type state: :class:`States`
+    """
+    def __init__(self, backend, node, address, systemManagerAddress, role, state):
+        super(SharedClusterInfo, self).__init__()
+        self.backend = backend
+        self.node = node
+        self.address = address
+        self._role = multiprocessing.Value(ctypes.c_char_p, role.name)
+        self._state = multiprocessing.Value(ctypes.c_char_p, state.name)
+        self._systemManagerAddress = multiprocessing.Value(ctypes.c_char_p, systemManagerAddress)
+
+    @property
+    def aliases(self):
+        """
+        Alias mappings
+        """
+        return self.backend.configuration.getAliases()
+
+    def getNodeAddress(self, node):
+        """
+        Get address for specified node
+
+        :param node: node
+        :type node: str
+        :returns: str or ``None`` if not found
+        """
+        return self.backend.configuration.getAddress(node)
+
+    @property
+    def nodeNames(self):
+        """
+        Names of the nodes in the cluster
+        """
+        return self.backend.configuration.getNodeNames()
+
+    @property
+    def role(self):
+        """
+        Node role
+        """
+        return Roles.valueOf(self._role.value)
+
+    @role.setter
+    def role(self, role):
+        if isinstance(role, Roles):
+            with self._role.get_lock():
+                self._role.value = role.name
+        else:
+            self.log.error("'%s' does not match enum of type '%s'", role, Roles)
+
+    @property
+    def state(self):
+        """
+        Node state
+        """
+        return States.valueOf(self._state.value)
+
+    @state.setter
+    def state(self, state):
+        if isinstance(state, States):
+            with self._state.get_lock():
+                self._state.value = state.name
+        else:
+            self.log.error("'%s' does not match enum of type '%s'", state, States)
+
+    @property
+    def systemManagerAddress(self):
+        """
+        Active system manager address
+        """
+        return self._systemManagerAddress.value
+
+    @systemManagerAddress.setter
+    def systemManagerAddress(self, address):
+        with self._systemManagerAddress.get_lock():
+            self._systemManagerAddress.value = address

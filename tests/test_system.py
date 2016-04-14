@@ -1,6 +1,8 @@
 import logging
 
-from c4.system.configuration import Configuration, States
+from c4.system.backend import Backend
+from c4.system.configuration import States
+
 
 log = logging.getLogger(__name__)
 
@@ -12,7 +14,7 @@ def test_system(system):
     logging.getLogger("c4.system.deviceManager").setLevel(logging.INFO)
     logging.getLogger("c4.system.manager.SystemManagerImplementation").setLevel(logging.DEBUG)
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     for node in system.keys():
         nodeInfo = configuration.getNode(node, flatDeviceHierarchy=True)

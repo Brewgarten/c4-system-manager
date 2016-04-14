@@ -4,7 +4,7 @@ import multiprocessing
 import pytest
 
 from c4.messaging import Router, RouterClient
-from c4.system.configuration import States, DBClusterInfo, Roles
+from c4.system.configuration import States, Roles
 from c4.system.deviceManager import (DeviceManager, DeviceManagerImplementation, DeviceManagerStatus,
                                      operation)
 from c4.system.messages import (LocalStartDeviceManager, LocalStopDeviceManager,
@@ -17,8 +17,8 @@ log = logging.getLogger(__name__)
 pytestmark = pytest.mark.usefixtures("temporaryIPCPath")
 
 @pytest.fixture
-def systemManagerClusterInfo():
-    return DBClusterInfo("test", "ipc://test.ipc", "ipc://test.ipc", role=Roles.ACTIVE, state=States.RUNNING)
+def systemManagerClusterInfo(temporaryBackend):
+    return temporaryBackend.ClusterInfo("test", "ipc://test.ipc", "ipc://test.ipc", Roles.ACTIVE, States.RUNNING)
 
 class SampleDeviceManager(DeviceManagerImplementation):
 

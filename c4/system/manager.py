@@ -19,9 +19,8 @@ from c4.messaging import (MessageTracker, MessagingException,
                           PeerRouter,
                           RouterClient,
                           callMessageHandler)
-from c4.system import db, egg
-from c4.system.configuration import (DBClusterInfo,
-                                     Configuration, ConfigurationInfo,
+from c4.system import egg
+from c4.system.configuration import (ConfigurationInfo,
                                      NodeInfo,
                                      States,
                                      Roles)
@@ -35,9 +34,12 @@ from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import getFullModuleName, getModuleClasses
 import platform as platformSpec
+from c4.system.backend import Backend, BackendInfo
 
 
 log = logging.getLogger(__name__)
+
+DEFAULT_CONFIGURATION_PATH = "/etc/c4"
 
 NOT_RUNNING_ACTIONS = set([
     "RegistrationNotification",
@@ -51,7 +53,7 @@ class SystemManager(PeerRouter):
     System Manager
 
     :param clusterInfo: cluster information
-    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
+    :type clusterInfo: :class:`~c4.system.configuration.ClusterInfo`
     :param name: name
     :type name: str
     :raises MessagingException: if either external or internal system manager address is already in use
@@ -153,7 +155,7 @@ class SystemManagerImplementation(object):
     System manager implementation which provides the handlers for messages.
 
     :param clusterInfo: cluster information
-    :type clusterInfo: :class:`~c4.system.configuration.DBClusterInfo`
+    :type clusterInfo: :class:`~c4.system.configuration.ClusterInfo`
     :param messageTracker: message tracker
     :type messageTracker: :class:`~c4.messaging.MessageTracker`
     """
@@ -421,7 +423,7 @@ class SystemManagerImplementation(object):
 
         for device_name in message["devices"]:
             self.log.debug("Changing %s/%s state from REGISTERED to MAINTENANCE.", node_name, device_name)
-            Configuration().changeState(node_name, device_name, States.MAINTENANCE)
+            Backend().configuration.changeState(node_name, device_name, States.MAINTENANCE)
 
     def handleDisableNode(self, message, envelope):
         """
@@ -463,7 +465,7 @@ class SystemManagerImplementation(object):
         (node_name, from_device_name) = self.parseFrom(envelope.From)
 
         # Received request to change the state of a node
-        Configuration().changeState(node_name, None, States.MAINTENANCE)
+        Backend().configuration.changeState(node_name, None, States.MAINTENANCE)
 
     def handleEnableDeviceManager(self, message, envelope):
         """
@@ -513,7 +515,7 @@ class SystemManagerImplementation(object):
 
         (node_name, from_device_name) = self.parseFrom(envelope.From)
 
-        configuration = Configuration()
+        configuration = Backend().configuration
         # change device state from MAINTENANCE to REGISTERED
         for device_name in message["devices"]:
             self.log.debug("Changing %s/%s state from MAINTENANCE to REGISTERED.", node_name, device_name)
@@ -569,7 +571,7 @@ class SystemManagerImplementation(object):
         (node_name, from_device_name) = self.parseFrom(envelope.From)
 
         # Received request to change the state of a node
-        Configuration().changeState(node_name, None, States.REGISTERED)
+        Backend().configuration.changeState(node_name, None, States.REGISTERED)
 
     def handleLocalStartDeviceManagerResponse(self, message, envelope):
         """
@@ -695,7 +697,7 @@ class SystemManagerImplementation(object):
         self.log.debug("Unregistering '%s' on '%s'", message['devices'], message['node'])
 
         node = message['node']
-        configuration = Configuration()
+        configuration = Backend().configuration
         for d in message['devices']:
             try:
                 configuration.removeDevice(node, d)
@@ -756,7 +758,7 @@ class SystemManagerImplementation(object):
                            envelope.From, self.clusterInfo.role, Roles.ACTIVE)
             return
 
-        configuration = Configuration()
+        configuration = Backend().configuration
         # add each given device name to node name
         for device_name in message["devices"]:
             try:
@@ -783,7 +785,7 @@ class SystemManagerImplementation(object):
         self.log.debug("Registration message from %s", envelope.From)
 
         # Is node in configuration?
-        configuration = Configuration()
+        configuration = Backend().configuration
         node = envelope.From
         if node not in configuration.getNodeNames():
             self.log.debug("Adding %s", node)
@@ -866,7 +868,7 @@ class SystemManagerImplementation(object):
             (node_name, component_name) = self.parseFrom(envelope.From)
             if "devices" in message:
 
-                configuration = Configuration()
+                configuration = Backend().configuration
                 # change state of the device manager in the configuration to running
                 for name, info in message["devices"].items():
                     if "state" in info and isinstance(info["state"], States):
@@ -918,7 +920,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        configuration = Configuration()
+        configuration = Backend().configuration
         # recursively load the message with the full device name and deviceInfo from configuration
         # of all devices that are REGISTERED
         def loadMessageWithRegisteredDevices(node_name, message, parent_prefix, node_or_device):
@@ -1025,14 +1027,16 @@ class SystemManagerImplementation(object):
                 self.log.debug("Received status from %s", envelope.From)
 
                 if name:
-                    configuration = Configuration()
+                    configuration = Backend().configuration
                     senderType = configuration.getDevice(node, name).type
                 else:
                     name = None
                     senderType = getFullModuleName(SystemManager) + ".SystemManager"
 
                 # TODO: this kind of database functionality should be in a separate History class
-                dbm = db.DBManager()
+                # FIXME: this only works with the shared SQLite backend right now
+                backend = Backend()
+                dbm = backend.database
                 dbm.write("begin")
                 # t_sm_history grows
                 # (until a limit is reached and a db trigger removes old rows)
@@ -1091,7 +1095,7 @@ class SystemManagerImplementation(object):
         """
         self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
         (node, device_name) = self.parseFrom(envelope.From)
-        configuration = Configuration()
+        configuration = Backend().configuration
         for device in message["devices"]:
             self.log.debug("Changing %s/%s state from RUNNING to REGISTERED.", node, device)
             configuration.changeState(node, device, States.REGISTERED)
@@ -1141,7 +1145,7 @@ class SystemManagerImplementation(object):
 
             if "state" in message and isinstance(message["state"], States):
 
-                configuration = Configuration()
+                configuration = Backend().configuration
                 allDevicesStopped = True
                 for deviceName, deviceInfo in message.get("devices", {}).items():
 
@@ -1230,7 +1234,7 @@ class SystemManagerImplementation(object):
         self.log.debug("Unregistering: {0}".format(envelope.From))
 
         # FIXME: The rest server is not receiving the response when the active system manager is unregistered
-        configuration = Configuration()
+        configuration = Backend().configuration
         configuration.removeNode(envelope.From)
         if envelope.From == self.node:
             # FIXME: determine what to do here since we are not stopping the actual process
@@ -1366,9 +1370,9 @@ def main():
     parser = argparse.ArgumentParser(description="C4 system manager")
 
     parentParser = argparse.ArgumentParser(add_help=False)
-    parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
     parentParser.add_argument("-n", "--node", action="store", default=currentNodeName, help="Node name for this system manager")
     parentParser.add_argument("-p", "--port", action="store", dest="node_port", type=int, default=5000, help="Port for this system manager")
+    parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
 
     commandParser = parser.add_subparsers(dest="command")
 
@@ -1395,15 +1399,50 @@ def main():
     if args.verbose > 3:
         logging.getLogger("c4.system.db").setLevel(logging.DEBUG)
 
+    # check for backend
+    backendConfigFile = os.path.join(DEFAULT_CONFIGURATION_PATH, "backend.json")
+    exampleProperties = {
+        "path.database": "/dev/shm",
+        "path.backup": "/tmp"
+    }
+    exampleInfo = BackendInfo("c4.backends.sharedSQLite.SharedSqliteDBBackend",
+                              properties=exampleProperties)
+    example = exampleInfo.toJSON(includeClassInfo=True, pretty=True)
+
+    if not os.path.exists(backendConfigFile):
+        log.error("could not find backend configuration file at '%s', e.g.:\n%s", backendConfigFile, example)
+        return 1
+    try:
+        backendInfo = BackendInfo.fromJSONFile(backendConfigFile)
+
+        # get class info
+        info = backendInfo.backend.split(".")
+        className = info.pop()
+        moduleName = ".".join(info)
+
+        # load class from module
+        log.info("loading backend implementation '%s' from module '%s'", className, moduleName)
+        module = __import__(moduleName, fromlist=[className])
+        clazz = getattr(module, className)
+
+        # create instance based off constructor and set the backend
+        backendImplementation = clazz(backendInfo)
+        backend = Backend(implementation=backendImplementation)
+
+    except Exception as e:
+        log.error("could not load backend configuration file from '%s' because '%s', e.g.:\n%s", backendConfigFile, e, example)
+        return 1
+
     if args.command == "join":
 
         # if active system manager address is supplied then we start as a thin system manager
         log.info("System manager information provided. Continuing as a thin node")
         if re.search(r"tcp://(?P<ip>(\d+\.\d+\.\d+\.\d+)):(?P<port>\d+)", args.address):
-            clusterInfo = DBClusterInfo(args.node,
-                                        "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.node_port),
-                                        args.address,
-                                        Roles.THIN)
+            clusterInfo = backend.ClusterInfo(args.node,
+                                              "tcp://{0}:{1}".format(socket.gethostbyname(socket.gethostname()), args.node_port),
+                                              args.address,
+                                              Roles.THIN,
+                                              States.DEPLOYED)
         else:
             log.error("'%s' is an invalid address for a system manager, expected 'tcp://ip:port'", args.address)
             return 1
@@ -1411,7 +1450,7 @@ def main():
     elif args.command == "run":
 
         try:
-            configuration = Configuration()
+            configuration = Backend().configuration
             if not configuration.getNodeNames() or args.force:
                 # if database is empty, then load from config file
                 if not args.config:
@@ -1432,10 +1471,11 @@ def main():
                 log.error("Current node name '%s' not found in configuration", args.node)
                 return 1
 
-            clusterInfo = DBClusterInfo(args.node,
-                                        configuration.getAddress(args.node),
-                                        configuration.getAddress("system-manager"),
-                                        configuration.getNode(args.node, includeDevices=False).role)
+            clusterInfo = backend.ClusterInfo(args.node,
+                                              configuration.getAddress(args.node),
+                                              configuration.getAddress("system-manager"),
+                                              configuration.getNode(args.node, includeDevices=False).role,
+                                              States.DEPLOYED)
 
         except Exception as e:
             log.error("Error in '%s'", args.config)

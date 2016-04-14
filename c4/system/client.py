@@ -18,7 +18,7 @@ class Client(RouterClient):
         if node:
             self.node = node
         else:
-            self.node = platformSpec.node()
+            self.node = platformSpec.node().split(".")[0]
         super(Client, self).__init__(self.node)
         self.infoDeviceAddress = "system-manager/info"
 

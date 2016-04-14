@@ -1,7 +1,7 @@
 import logging
 
+from c4.system.backend import Backend
 from c4.system.client import Client
-from c4.system.configuration import Configuration
 
 
 log = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class TestClient(object):
         client = Client("rack1-master1")
 
         # use configuration for verification
-        configuration = Configuration()
+        configuration = Backend().configuration
 
         node1 = client.getNode("rack1-master1")
         assert node1

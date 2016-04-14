@@ -5,11 +5,12 @@ import tempfile
 
 import pytest
 
-from c4.system.configuration import (Configuration,
-                                     DBClusterInfo, DeviceInfo,
+from c4.backends.sharedSQLite import SharedSqliteDBBackend
+from c4.system.backend import Backend, BackendInfo
+from c4.system.configuration import (DeviceInfo,
                                      NodeInfo,
                                      PlatformInfo,
-                                     Roles)
+                                     Roles, States)
 from c4.system.manager import SystemManager
 
 
@@ -33,11 +34,11 @@ def cleandir(request):
     return newCurrentWorkingDirectory
 
 @pytest.fixture
-def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
+def system(request, temporaryBackend, cleandir, temporaryIPCPath):
     """
     Set up a basic system configuration
     """
-    configuration = Configuration()
+    configuration = temporaryBackend.configuration
     platform = PlatformInfo("im-devops", "c4.system.platforms.devops.IMDevOps")
     configuration.addPlatform(platform)
 
@@ -63,17 +64,17 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
     log.debug(configuration.toInfo().toJSON(pretty=True))
 
     systemSetup = {}
-    node1ClusterInfo = DBClusterInfo("rack1-master1", "tcp://127.0.0.1:5000", "tcp://127.0.0.1:5000", role=Roles.ACTIVE)
+    node1ClusterInfo = temporaryBackend.ClusterInfo("rack1-master1", "tcp://127.0.0.1:5000", "tcp://127.0.0.1:5000", Roles.ACTIVE, States.DEPLOYED)
     systemSetup["rack1-master1"] = SystemManager(node1ClusterInfo)
-    node2ClusterInfo = DBClusterInfo("rack1-master2", "tcp://127.0.0.1:6000", "tcp://127.0.0.1:5000", role=Roles.PASSIVE)
+    node2ClusterInfo = temporaryBackend.ClusterInfo("rack1-master2", "tcp://127.0.0.1:6000", "tcp://127.0.0.1:5000", Roles.PASSIVE, States.DEPLOYED)
     systemSetup["rack1-master2"] = SystemManager(node2ClusterInfo)
-    node3ClusterInfo = DBClusterInfo("rack1-master3", "tcp://127.0.0.1:7000", "tcp://127.0.0.1:5000")
+    node3ClusterInfo = temporaryBackend.ClusterInfo("rack1-master3", "tcp://127.0.0.1:7000", "tcp://127.0.0.1:5000", Roles.THIN, States.DEPLOYED)
     systemSetup["rack1-master3"] = SystemManager(node3ClusterInfo)
 
     def systemTeardown():
         log.debug("clean up")
 
-        systemManagerNode = Configuration().getSystemManagerNodeName()
+        systemManagerNode = temporaryBackend.configuration.getSystemManagerNodeName()
         activeSystemManager = systemSetup.pop(systemManagerNode)
 
         for node, systemManager in systemSetup.items():
@@ -87,21 +88,42 @@ def system(request, temporaryDatabasePaths, cleandir, temporaryIPCPath):
 
     return systemSetup
 
-@pytest.fixture
-def temporaryDatabasePaths(request, monkeypatch):
+@pytest.fixture(scope="function")
+def temporaryBackend(request):
     """
-    Create a new temporary directory and set c4.system.db.BACKUP_PATH
-    and c4.system.db.DATABASE_PATH to it
+    Set backend to something temporary for testing
     """
+    # save old backend
+    try:
+        oldBackend = Backend()
+    except ValueError:
+        newpath = tempfile.mkdtemp(dir="/dev/shm")
+        log.info("setting default temp backend to use '%s' as part of testing", newpath)
+        infoProperties = {
+            "path.database": newpath,
+            "path.backup": newpath
+        }
+        info = BackendInfo("c4.backends.sharedSQLite.SharedSqliteDBBackend", properties=infoProperties)
+        oldBackend = SharedSqliteDBBackend(info)
+
     newpath = tempfile.mkdtemp(dir="/dev/shm")
 #     newpath = tempfile.mkdtemp(dir="/tmp")
-    monkeypatch.setattr("c4.system.db.BACKUP_PATH", newpath)
-    monkeypatch.setattr("c4.system.db.DATABASE_PATH", newpath)
+    infoProperties = {
+        "path.database": newpath,
+        "path.backup": newpath
+    }
+    info = BackendInfo("c4.backends.sharedSQLite.SharedSqliteDBBackend", properties=infoProperties)
+    testBackendImplementation = SharedSqliteDBBackend(info)
+
+    # change backend
+    newBackend = Backend(implementation=testBackendImplementation)
 
     def removeTemporaryDirectory():
+        # change backend back
+        Backend(implementation=oldBackend)
         shutil.rmtree(newpath)
     request.addfinalizer(removeTemporaryDirectory)
-    return newpath
+    return newBackend
 
 @pytest.fixture
 def temporaryIPCPath(request, monkeypatch):

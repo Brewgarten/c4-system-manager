@@ -2,14 +2,16 @@ import logging
 
 import pytest
 
-from c4.system.configuration import Configuration, DBClusterInfo, DeviceInfo, NodeInfo, PlatformInfo, Roles, States, \
+from c4.system.backend import Backend
+from c4.system.configuration import DeviceInfo, NodeInfo, PlatformInfo, Roles, States, \
     ConfigurationInfo, ConfigurationMissingSystemManagerAliasError, \
     ConfigurationNameMismatchError, ConfigurationMissingAliasNodeError, \
     ConfigurationMissingActiveNodeError, ConfigurationTooManyActiveNodesError
 
+
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.usefixtures("temporaryDatabasePaths")
+pytestmark = pytest.mark.usefixtures("temporaryBackend")
 
 @pytest.fixture
 def nodes():
@@ -28,7 +30,7 @@ def nodes():
 
 def test_aliases(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
@@ -53,7 +55,7 @@ def test_aliases(nodes):
 
 def test_clear(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     for node in nodes.values():
         configuration.addNode(node)
@@ -81,7 +83,7 @@ def test_clear(nodes):
 def test_clusterInfo(nodes):
 
     # setup test configuration
-    configuration = Configuration()
+    configuration = Backend().configuration
     platform = PlatformInfo("im-devops", "c4.system.platforms.devops.IMDevOps")
     platform.settings["my_timer_interval"] = 3000
     configuration.addPlatform(platform)
@@ -106,8 +108,11 @@ def test_clusterInfo(nodes):
     node2.addDevice(DeviceInfo("memory", "c4.devices.mem.Memory"))
     configuration.addNode(node2)
 
-    dbClusterInfo = DBClusterInfo(nodes["node1"].name, nodes["node1"].address,
-                                     nodes["node1"].address, role=Roles.ACTIVE)
+    dbClusterInfo = Backend().ClusterInfo(nodes["node1"].name,
+                                          nodes["node1"].address,
+                                          nodes["node1"].address,
+                                          Roles.ACTIVE,
+                                          States.DEPLOYED)
 
     # check db cluster information for ACTIVE role
     assert dbClusterInfo.aliases == configuration.getAliases()
@@ -120,21 +125,22 @@ def test_clusterInfo(nodes):
     assert dbClusterInfo.state == States.DEPLOYED
     assert dbClusterInfo.systemManagerAddress == nodes["node1"].address
 
-    # check db cluster information for THIN role
-    dbClusterInfo.role = Roles.THIN
-    assert dbClusterInfo.aliases == {}
-    assert dbClusterInfo.getNodeAddress(nodes["node1"].name) == nodes["node1"].address
-    assert dbClusterInfo.getNodeAddress(nodes["node2"].name) is None
-    assert dbClusterInfo.getNodeAddress("system-manager") == nodes["node1"].address
-    assert dbClusterInfo.getNodeAddress("nonExistingNode") is None
-    assert set(dbClusterInfo.nodeNames) == set([nodes["node1"].name, "system-manager"])
-    assert dbClusterInfo.role == Roles.THIN
-    assert dbClusterInfo.state == States.DEPLOYED
-    assert dbClusterInfo.systemManagerAddress == nodes["node1"].address
+    # TODO: need to revisit this check since by default backend is shared now
+#     # check db cluster information for THIN role
+#     dbClusterInfo.role = Roles.THIN
+#     assert dbClusterInfo.aliases == {}
+#     assert dbClusterInfo.getNodeAddress(nodes["node1"].name) == nodes["node1"].address
+#     assert dbClusterInfo.getNodeAddress(nodes["node2"].name) is None
+#     assert dbClusterInfo.getNodeAddress("system-manager") == nodes["node1"].address
+#     assert dbClusterInfo.getNodeAddress("nonExistingNode") is None
+#     assert set(dbClusterInfo.nodeNames) == set([nodes["node1"].name, "system-manager"])
+#     assert dbClusterInfo.role == Roles.THIN
+#     assert dbClusterInfo.state == States.DEPLOYED
+#     assert dbClusterInfo.systemManagerAddress == nodes["node1"].address
 
 def test_details(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
@@ -183,7 +189,7 @@ def test_details(nodes):
 
 def test_devices(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
     node1DeviceNames = set()
@@ -206,7 +212,7 @@ def test_devices(nodes):
     assert db2DeviceInfo.type == db2.type
 
     # check non existing device
-    assert configuration.getNode("nonExistingDevice") is None
+    assert configuration.getNode("nonExistingNode") is None
     assert configuration.getDevice("nonExistingNode", "db2.instance1") is None
     assert configuration.getDevice(nodes["node1"].name, "db2.nonExistingDevice") is None
 
@@ -290,7 +296,7 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
     Test without support for common table expressions
     """
     monkeypatch.setattr("sqlite3.sqlite_version", "3.8.2")
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
     node1DeviceNames = set()
@@ -393,7 +399,7 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
 
 def test_json(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     for node in nodes.values():
         configuration.addNode(node)
@@ -517,7 +523,7 @@ def test_jsonInfos():
 
 def test_nodes(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     # make sure child devices are added as well
     parentDevice = DeviceInfo("parent", "c4.devices.test.Test")
@@ -571,7 +577,7 @@ def test_nodes(nodes):
 
 def test_platform():
 
-    configuration = Configuration()
+    configuration = Backend().configuration
     platform = PlatformInfo("im-devops", "c4.system.platforms.devops.IMDevOps", "development platform", {"test": 0})
     platform.settings["my_timer_interval"] = 3000
     configuration.addPlatform(platform)
@@ -584,7 +590,7 @@ def test_platform():
 
 def test_resetDeviceStates(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
@@ -610,7 +616,7 @@ def test_resetDeviceStates(nodes):
 
 def test_roles(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
@@ -627,7 +633,7 @@ def test_roles(nodes):
 
 def test_states(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
@@ -665,7 +671,7 @@ def test_states(nodes):
 
 def test_targetStates(nodes):
 
-    configuration = Configuration()
+    configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
