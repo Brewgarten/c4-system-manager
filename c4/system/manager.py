@@ -270,31 +270,6 @@ class SystemManagerImplementation(object):
         if self.clusterInfo.role == Roles.ACTIVE:
             Version.deleteVersion(self.node, "", message["type"])
 
-    def areMyDeviceManagersStopped(self,devices):
-        """
-        Check if devices are running
-        """
-        for deviceInfo in devices.values():
-            if deviceInfo.state == States.RUNNING:
-                return False
-            if not self.areMyDeviceManagersStopped(deviceInfo.devices):
-                return False
-        return True
-
-    def executeNodeRegistration(self):
-        """
-        Execute node registration
-        """
-        if self.clusterInfo.state == States.DEPLOYED or self.clusterInfo.state == States.REGISTERING:
-            self.clusterInfo.state = States.REGISTERING
-            envelope =  RegistrationNotification(self.node)
-            node_info = NodeInfo(self.node, self.clusterInfo.getNodeAddress(self.node),
-                                 self.clusterInfo.role, self.clusterInfo.state)
-            # TODO: have it automatically serialize
-            envelope.Message['NodeInfo'] = node_info.toJSONSerializable(includeClassInfo=True)
-            envelope.Message['version'] = getattr(c4.system, "__version__", "unknown")
-            self.client.forwardMessage(envelope)
-
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
         deviceManagerImplementations = sorted(getModuleClasses(c4.devices, DeviceManagerImplementation))
@@ -799,21 +774,28 @@ class SystemManagerImplementation(object):
         self.client.forwardMessage(StartNode(node))
 
         # send registration response
-        return {"state": States.REGISTERED}
+        return {
+            "role": configuration.getRole(node),
+            "state": States.REGISTERED
+        }
 
-    def handleRegistrationNotificationResponse(self):
+    def handleRegistrationNotificationResponse(self, message):
         """
         Handle :class:`~c4.system.messages.RegisterNode` response messages
+
+        :param message: message
+        :type message: dict
         """
         if self.clusterInfo.state == States.REGISTERING:
             self.clusterInfo.state = States.REGISTERED
-            self.log.debug("'%s' is now registered", self.node)
+            self.clusterInfo.role = message.get("role", Roles.THIN)
+            self.log.debug("'%s' is now registered with role '%s'", self.node, self.clusterInfo.role.name)
         elif self.clusterInfo.state == States.STARTING or self.clusterInfo.state == States.RUNNING:
             # we implicitly know that the active system manager must have registered because it sent
             # a start message
-            pass
+            self.clusterInfo.role = message.get("role", Roles.THIN)
+            self.log.debug("'%s' is now registered with role '%s'", self.node, self.clusterInfo.role.name)
         else:
-            # TODO: skip if we are already started/starting
             self.log.error("Received register node acknowlegdment but current state is '%s'", self.clusterInfo.state)
 
     def handleStartDeviceManagers(self, message, envelope):
