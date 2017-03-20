@@ -5,9 +5,11 @@ import logging
 import os
 import sqlite3
 
-import pkg_resources
+from c4.utils.logutil import ClassLogger
+from c4.utils.util import getPackageData
+from c4.utils.version import BasicVersion
 
-from c4.system.backend import BackendImplementation, BackendInfo
+from c4.system.backend import BackendImplementation
 from c4.system.configuration import (Configuration,
                                      DeviceInfo,
                                      NodeInfo,
@@ -15,13 +17,10 @@ from c4.system.configuration import (Configuration,
                                      Roles,
                                      SharedClusterInfo,
                                      States)
-from c4.utils.logutil import ClassLogger
-from c4.utils.util import getFullModuleName
-from c4.utils.version import BasicVersion
 
 
 # Lowest version of SQLite with Common Table Expression support
-SqliteCTEMinimumVersion=BasicVersion("3.8.3")
+SqliteCTEMinimumVersion = BasicVersion("3.8.3")
 
 @ClassLogger
 class DBManager(object):
@@ -86,7 +85,7 @@ class DBManager(object):
                 cls.log.error("Error creating database: %s.  Already exists.", fullDBName)
                 return False
         # the schema file is in the data dir
-        schema = pkg_resources.resource_string("c4.data", "sql/sysmgr.sql")  # @UndefinedVariable
+        schema = getPackageData("c4.data", "sql/sysmgr.sql")
         # create the database
         connection = sqlite3.connect(fullDBName)
         cursor = connection.cursor()
@@ -265,7 +264,7 @@ class DBManager(object):
             cur = self.conn.cursor()
             cur.executemany(statement, parameters)
             end = datetime.datetime.utcnow()
-            if (self.log.isEnabledFor(logging.DEBUG)):
+            if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug("Executing sql update/insert: \n%s\n%s\ntook %s",
                                str.strip(statement), "\n".join(str(p) for p in parameters), end-start)
             return cur.rowcount
@@ -302,6 +301,34 @@ class SharedSqliteDBConfiguration(Configuration):
     def __init__(self, database):
         self.database = database
 
+    def _getDetails(self, node, name=None):
+        """
+        Get the details of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: (id, dict)
+        :rtype: tuple
+        """
+        if name:
+            info = self.getDevice(node, name)
+        else:
+            info = self.getNode(node, includeDevices=False)
+
+        if info is None:
+            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
+            return (-1, {})
+
+        details = {
+            key: value
+            for key, value in info.properties.items()
+        }
+        if name is None:
+            details["role"] = info.role.name
+        return (info._id, details)
+
     def addAlias(self, alias, node):
         """
         Add an alias for a node.
@@ -322,8 +349,7 @@ class SharedSqliteDBConfiguration(Configuration):
             return None
         # attempt to add alias for the node
         inserted = self.database.writeCommit("""
-            insert into t_sm_configuration_alias (alias, node_name) values (?, ?)""",
-            (alias, node))
+            insert into t_sm_configuration_alias (alias, node_name) values (?, ?)""", (alias, node))
         if inserted < 1:
             self.log.error("'%s' is already an alias", alias)
             return None
@@ -353,14 +379,14 @@ class SharedSqliteDBConfiguration(Configuration):
         deviceParts.pop()
         # go through the hierarchy and get each device id
         # we want the last id of the hierarchy
-        parentId = nodeInfo.id
+        parentId = nodeInfo._id
         existingDevices = nodeInfo.devices
         for devicePart in deviceParts:
 
             if devicePart not in existingDevices:
                 self.log.error("unable to add device because device parent '%s' not found for node '%s'", devicePart, node)
                 return None
-            parentId = existingDevices[devicePart].id
+            parentId = existingDevices[devicePart]._id
             existingDevices = existingDevices[devicePart].devices
 
         if device.name in existingDevices:
@@ -369,13 +395,11 @@ class SharedSqliteDBConfiguration(Configuration):
 
         self.database.writeCommit("""
             insert into t_sm_configuration (parent_id, name, state, type, details)
-            values (?, ?, ?, ?, ?)""",
-            (parentId, device.name, device.state.name, device.type, json.dumps(device.details)))
+            values (?, ?, ?, ?, ?)""", (parentId, device.name, device.state.name, device.type, json.dumps(device.properties)))
         # get the id of the last configuration record
-        rows = self.database.query("select id from t_sm_configuration where parent_id is ? and name = ?",
-            (parentId, device.name))
-        device.id = rows[0]["id"]
-        device.parentId = parentId
+        rows = self.database.query("select id from t_sm_configuration where parent_id is ? and name = ?", (parentId, device.name))
+        device._id = rows[0]["id"]
+        device._parentId = parentId
 
         # save child devices
         childDevices = device.devices.values()
@@ -400,10 +424,14 @@ class SharedSqliteDBConfiguration(Configuration):
             self.log.error("node '%s' already exists", node.name)
             return None
 
+        details = {
+            key: value
+            for key, value in node.properties.items()
+        }
+        details["role"] = node.role.name
         self.database.writeCommit("""
             insert into t_sm_configuration (name, state, type, details)
-            values (?, ?, ?, ?)""",
-            (node.name, node.state.name, "c4.system.manager.SystemManager", json.dumps(node.details)))
+            values (?, ?, ?, ?)""", (node.name, node.state.name, "c4.system.manager.SystemManager", json.dumps(details)))
         nodeInfo = self.getNode(node.name, includeDevices=False)
 
         # save child devices
@@ -424,13 +452,12 @@ class SharedSqliteDBConfiguration(Configuration):
         """
         self.database.write("begin")
         self.database.write("delete from t_sm_platform")
-        self.database.writeMany("""
-            insert into t_sm_platform (property, value) values (?, ?)""",
+        self.database.writeMany(
+            """insert into t_sm_platform (property, value) values (?, ?)""",
             ("name", platform.name),
             ("type", platform.type),
             ("description", platform.description),
-            ("settings", json.dumps(platform.settings))
-        )
+            ("settings", json.dumps(platform.settings)))
         self.database.write("commit")
 
     def clear(self):
@@ -468,31 +495,31 @@ class SharedSqliteDBConfiguration(Configuration):
             return None
         return alias
 
-    def changeDetail(self, node, name, detail, value, setIfNotExist=False):
+    def changeProperty(self, node, name, propertyName, value, setIfNotExist=False):
         """
-        Change detail property of a system or device manager to the specified value
+        Change property property of a system or device manager to the specified value
 
         :param node: node
         :type node: str
         :param name: device manager name
         :type name: str
-        :param detail: detail property
-        :type detail: str
-        :param value: detail value
+        :param propertyName: property name
+        :type propertyName: str
+        :param value: property value
         :type value: str
         :returns: previous value
         """
-        rowId, details = self.getDetails(node, name)
+        rowId, details = self._getDetails(node, name)
         if rowId < 0:
             return None
-        if detail not in details and not setIfNotExist:
-            self.log.error("detail '%s' of '%s/%s' does not exist", detail, node, name)
+        if propertyName not in details and not setIfNotExist:
+            self.log.error("property '%s' of '%s/%s' does not exist", propertyName, node, name)
             return None
-        previousValue = details.get(detail, None)
-        details[detail] = value
+        previousValue = details.get(propertyName, None)
+        details[propertyName] = value
         updated = self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
         if updated < 1:
-            self.log.error("could not change detail '%s' of '%s/%s' to '%s'", detail, node, name, value)
+            self.log.error("could not change property '%s' of '%s/%s' to '%s'", propertyName, node, name, value)
             return None
         return previousValue
 
@@ -510,7 +537,7 @@ class SharedSqliteDBConfiguration(Configuration):
         if not isinstance(role, Roles):
             self.log.error("'%s' does not match enum of type '%s'", role, Roles)
             return
-        roleName = self.changeDetail(node, None, "role", role.name)
+        roleName = self.changeProperty(node, None, "role", role.name)
         if not roleName:
             return None
         return Roles.valueOf(roleName)
@@ -540,9 +567,9 @@ class SharedSqliteDBConfiguration(Configuration):
                     return None
 
                 previousState = deviceInfo.state
-                self.database.writeCommit("""
-                    update t_sm_configuration set state = ? where id is ?""",
-                    (state.name, deviceInfo.id))
+                self.database.writeCommit(
+                    """update t_sm_configuration set state = ? where id is ?""",
+                    (state.name, deviceInfo._id))
 
             else:
                 if state == States.REGISTERED or state == States.MAINTENANCE:
@@ -555,18 +582,18 @@ class SharedSqliteDBConfiguration(Configuration):
                     return None
 
                 previousState = nodeInfo.state
-                self.database.writeCommit("""
-                    update t_sm_configuration set state = ? where id is ?""",
-                    (state.name, nodeInfo.id))
+                self.database.writeCommit(
+                    """update t_sm_configuration set state = ? where id is ?""",
+                    (state.name, nodeInfo._id))
 
                 # handle special cases
                 if state == States.REGISTERED or state == States.MAINTENANCE:
 
                     deviceList = sorted(nodeInfo.devices.values())
                     # note that we do not automatically change the state of children if they are in Maintenance mode
-                    self.database.writeMany("""
-                        update t_sm_configuration set state = ? where id is ? and state is not 'MAINTENANCE'""",
-                        *[(state.name, device.id) for device in deviceList])
+                    self.database.writeMany(
+                        """update t_sm_configuration set state = ? where id is ? and state is not 'MAINTENANCE'""",
+                        *[(state.name, device._id) for device in deviceList])
 
             self.log.debug("changed state of '%s%s' from '%s' to '%s'", node, "/" + name if name else "", previousState, state.name)
             return previousState
@@ -590,11 +617,11 @@ class SharedSqliteDBConfiguration(Configuration):
         """
         if not isinstance(state, States):
             self.log.error("'%s' does not match enum of type '%s'", state, States)
-            return
-        stateName = self.changeDetail(node, name, "targetState", state.name, setIfNotExist=True)
-        if not stateName:
             return None
-        return States.valueOf(stateName)
+        previousStateName = self.changeProperty(node, name, "targetState", state.name, setIfNotExist=True)
+        if previousStateName is None:
+            return None
+        return States.valueOf(previousStateName)
 
     def getAliases(self):
         """
@@ -605,44 +632,6 @@ class SharedSqliteDBConfiguration(Configuration):
         """
         rows = self.database.query("select alias, node_name from t_sm_configuration_alias")
         return {row["alias"]: row["node_name"] for row in rows}
-
-    def getDetail(self, node, name, detail):
-        """
-        Get the detail property of a system or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :param detail: detail property
-        :type detail: str
-        :returns: str
-        """
-        rowId, details = self.getDetails(node, name)
-        if rowId < 0:
-            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
-        return details.get(detail)
-
-    def getDetails(self, node, name=None):
-        """
-        Get the details of a system or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :returns: (id, dict)
-        :rtype: tuple
-        """
-        if name:
-            info = self.getDevice(node, name)
-        else:
-            info = self.getNode(node, includeDevices=False)
-
-        if info is None:
-            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
-            return (-1, {})
-        return (info.id, info.details)
 
     def getPlatform(self):
         """
@@ -662,6 +651,39 @@ class SharedSqliteDBConfiguration(Configuration):
             json.loads(data.get("settings", "{}"))
         )
 
+    def getProperty(self, node, name, propertyName):
+        """
+        Get the property of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param propertyName: property name
+        :type propertyName: str
+        :returns: str
+        """
+        rowId, details = self._getDetails(node, name)
+        if rowId < 0:
+            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
+        return details.get(propertyName)
+
+    def getProperties(self, node, name=None):
+        """
+        Get the properties of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: properties or ``None`` if node or device does not exist
+        :rtype: dict
+        """
+        _, details = self._getDetails(node, name)
+        if name is None and "role" in details:
+            del details["role"]
+        return details
+
     def getTargetState(self, node, name=None):
         """
         Get the target state of a node or device manager.
@@ -672,7 +694,7 @@ class SharedSqliteDBConfiguration(Configuration):
         :type name: str
         :returns: :class:`~c4.system.configuration.States`
         """
-        state = self.getDetail(node, name, "targetState");
+        state = self.getProperty(node, name, "targetState")
         if state is None:
             return None
         return States.valueOf(state)
@@ -742,11 +764,12 @@ class SharedSqliteDBConfiguration(Configuration):
             # deal with node information
             nodeRow = rows.pop(0)
             nodeDetailsJSON = nodeRow["details"]
-            nodeDetails = json.loads(nodeDetailsJSON)
-            nodeRole = Roles.valueOf(nodeDetails["role"])
+            nodeProperties = json.loads(nodeDetailsJSON)
+            nodeRole = Roles.valueOf(nodeProperties.pop("role"))
             nodeState = States.valueOf(nodeRow["state"])
-            nodeInfo = NodeInfo(nodeRow["name"], nodeDetails["address"], nodeRole, nodeState, nodeRow["id"])
-            nodeInfo.details = nodeDetails
+            nodeInfo = NodeInfo(nodeRow["name"], nodeProperties["address"], role=nodeRole, state=nodeState)
+            nodeInfo._id = nodeRow["id"]
+            nodeInfo.properties = nodeProperties
 
             if rows:
 
@@ -760,7 +783,7 @@ class SharedSqliteDBConfiguration(Configuration):
                     currentPath = row["name"].split(".")
 
                     detailsJSON = row["details"]
-                    details = json.loads(detailsJSON)
+                    properties = json.loads(detailsJSON)
 
                     if flatDeviceHierarchy:
 
@@ -769,15 +792,19 @@ class SharedSqliteDBConfiguration(Configuration):
                         deviceName = ".".join(currentPath)
 
                         # create device information
-                        deviceInfo = DeviceInfo(deviceName, row["type"], States.valueOf(row["state"]), row["id"], row["parent_id"])
-                        deviceInfo.details = details
+                        deviceInfo = DeviceInfo(deviceName, row["type"], state=States.valueOf(row["state"]))
+                        deviceInfo._id = row["id"]
+                        deviceInfo._parentId = row["parent_id"]
+                        deviceInfo.properties = properties
                         nodeInfo.devices[deviceName] = deviceInfo
 
                     else:
                         # create device information
                         name = currentPath.pop()
-                        deviceInfo = DeviceInfo(name, row["type"], States.valueOf(row["state"]), row["id"], row["parent_id"])
-                        deviceInfo.details = details
+                        deviceInfo = DeviceInfo(name, row["type"], state=States.valueOf(row["state"]))
+                        deviceInfo._id = row["id"]
+                        deviceInfo._parentId = row["parent_id"]
+                        deviceInfo.properties = properties
 
                         # traverse path to parent
                         currentDeviceInfo = root
@@ -802,24 +829,6 @@ class SharedSqliteDBConfiguration(Configuration):
             where parent_id is null""")
         return [row["name"] for row in rows]
 
-    def removeDetail(self, node, name, detail):
-        """
-        Remove detail property from a system or device manager
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :param detail: detail property
-        :type detail: str
-        """
-        rowId, details = self.getDetails(node, name)
-        if detail in details:
-            del details[detail]
-            self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
-        else:
-            self.log.error("could not remove '%s' from '%s/%s' because it detail does not exist", detail, node, name)
-
     def removeDevice(self, node, fullDeviceName):
         """
         Remove a device from the configuration
@@ -832,11 +841,11 @@ class SharedSqliteDBConfiguration(Configuration):
         devices = self.getDevices(node, flatDeviceHierarchy=True)
 
         # get matching device and its children
-        rowIds = sorted([(device.id,) for device in devices.values() if device.name.startswith(fullDeviceName)])
+        rowIds = sorted([(device._id,) for device in devices.values() if device.name.startswith(fullDeviceName)])
         if rowIds:
             self.database.writeMany("""
                 delete from t_sm_configuration where id is ?""",
-                *rowIds)
+                                    *rowIds)
         else:
             self.log.error("could not remove '%s' from '%s' because it does not exist", fullDeviceName, node)
 
@@ -852,35 +861,43 @@ class SharedSqliteDBConfiguration(Configuration):
             self.log.error("could not remove '%s' because it does not exist", node)
             return
 
-        rowIds = [(nodeInfo.id,)]
-        rowIds.extend([(device.id,) for device in nodeInfo.devices.values()])
+        rowIds = [(nodeInfo._id,)]
+        rowIds.extend([(device._id,) for device in nodeInfo.devices.values()])
         rowIds = sorted(rowIds)
-        self.database.writeMany("""
-            delete from t_sm_configuration where id is ?""",
+        self.database.writeMany(
+            """delete from t_sm_configuration where id is ?""",
             *rowIds)
 
         # remove aliases for node
-        self.database.writeCommit("""
-            delete from t_sm_configuration_alias where node_name=?""",
+        self.database.writeCommit(
+            """delete from t_sm_configuration_alias where node_name=?""",
             (node,))
 
-    def removeTargetState(self, node, name=None):
+    def removeProperty(self, node, name, propertyName):
         """
-        Remove target state from a system or device manager
+        Remove property property from a system or device manager
 
         :param node: node
         :type node: str
         :param name: device manager name
         :type name: str
+        :param property: property
+        :type property: str
         """
-        self.removeDetail(node, name, "targetState")
+        rowId, details = self._getDetails(node, name)
+        if propertyName in details:
+            del details[propertyName]
+            self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
+        else:
+            self.log.error("could not remove '%s' from '%s/%s' because it does not exist", propertyName, node, name)
 
     def resetDeviceStates(self):
         """
         Sets the states of all devices to REGISTERED unless their state is
         MAINTENANCE or UNDEPLOYED.
         """
-        self.database.writeCommit("""
+        self.database.writeCommit(
+            """
             update t_sm_configuration set state = ?
             where parent_id is not null
             and state is not 'MAINTENANCE'
@@ -897,11 +914,11 @@ class SharedSqliteDBConfiguration(Configuration):
         :returns: node name
         :rtype: str
         """
-        rows = self.database.query("""
+        rows = self.database.query(
+            """
             select node_name from t_sm_configuration_alias
             where alias is ?""",
             (alias,))
         if rows:
             return rows[0]["node_name"]
-        else:
-            None
+        return None

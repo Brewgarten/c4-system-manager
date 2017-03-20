@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 import ctypes
 import logging
 import multiprocessing
@@ -5,15 +6,11 @@ import multiprocessing
 from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
-from c4.utils.version import BasicVersion
+
 from c4.system.backend import Backend
-from abc import ABCMeta, abstractmethod
 
 
 log = logging.getLogger(__name__)
-
-# Lowest version of SQLite with Common Table Expression support
-SqliteCTEMinimumVersion=BasicVersion("3.8.3")
 
 class Roles(Enum):
     """
@@ -124,6 +121,22 @@ class Configuration(object):
         """
 
     @abstractmethod
+    def changeProperty(self, node, name, propertyName, value, setIfNotExist=False):
+        """
+        Change property property of a system or device manager to the specified value
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param propertyName: property name
+        :type propertyName: str
+        :param value: property value
+        :type value: str
+        :returns: previous value
+        """
+
+    @abstractmethod
     def changeRole(self, node, role):
         """
         Change role of a system manager
@@ -135,13 +148,6 @@ class Configuration(object):
         :returns: previous role
         :rtype: :class:`Roles`
         """
-        if not isinstance(role, Roles):
-            self.log.error("'%s' does not match enum of type '%s'", role, Roles)
-            return
-        roleName = self.changeDetail(node, None, "role", role.name)
-        if not roleName:
-            return None
-        return Roles.valueOf(roleName)
 
     @abstractmethod
     def changeState(self, node, name, state):
@@ -158,7 +164,6 @@ class Configuration(object):
         :rtype: :class:`States`
         """
 
-    @abstractmethod
     def changeTargetState(self, node, name, state):
         """
         Change target state of a system or device manager
@@ -172,6 +177,10 @@ class Configuration(object):
         :returns: previous target state
         :rtype state: :class:`States`
         """
+        if not isinstance(state, States):
+            self.log.error("'%s' does not match enum of type '%s'", state, States)
+            return None
+        return self.changeProperty(node, name, "targetState", state, setIfNotExist=True)
 
     def getAddress(self, node):
         """
@@ -185,7 +194,6 @@ class Configuration(object):
         :rtype str
         """
         info = self.getNode(node, includeDevices=False)
-
         if info is not None:
             return info.address
 
@@ -195,7 +203,7 @@ class Configuration(object):
             self.log.error("could not get address because node '%s' does not exist", node)
             return None
 
-        info =  self.getNode(nodeName, includeDevices=False)
+        info = self.getNode(nodeName, includeDevices=False)
         if info is None:
             self.log.error("could not get address because node for alias '%s' does not exist", nodeName)
             return None
@@ -230,12 +238,10 @@ class Configuration(object):
         deviceParts = fullDeviceName.split(".")
         deviceInfo = nodeInfo
         for devicePart in deviceParts:
-
             if devicePart not in deviceInfo.devices:
                 self.log.error("unable to get device because device parent '%s' not found for device '%s'", devicePart, fullDeviceName)
                 return None
             deviceInfo = deviceInfo.devices[devicePart]
-
         return deviceInfo
 
     def getDevices(self, node, flatDeviceHierarchy=False):
@@ -251,75 +257,9 @@ class Configuration(object):
         """
         nodeInfo = self.getNode(node, flatDeviceHierarchy=flatDeviceHierarchy)
         if nodeInfo is None:
-            self.log.error("Could get device list because node '%s' does not exist", node)
+            self.log.error("could not get device list because node '%s' does not exist", node)
             return {}
         return nodeInfo.devices
-
-    @abstractmethod
-    def getPlatform(self):
-        """
-        Get platform information
-
-        :returns: platform
-        :rtype: :class:`~c4.system.configuration.PlatformInfo`
-        """
-
-    def getRole(self, node):
-        """
-        Get the role of a system manager.
-
-        :param node: node
-        :type node: str
-        :returns: role
-        :rtype: :class:`Roles`
-        """
-        info = self.getNode(node, includeDevices=False)
-
-        if info is None:
-            self.log.error("could not get role because '%s' does not exist", node)
-            return None
-        return info.role
-
-    def getState(self, node, name=None):
-        """
-        Get the state of a system or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :returns: :class:`~c4.system.configuration.States`
-        """
-        if name:
-            info = self.getDevice(node, name)
-        else:
-            info = self.getNode(node, includeDevices=False)
-
-        if info is None:
-            self.log.error("could not get state because '%s%s' does not exist", node, "/" + name if name else "")
-            return None
-        return info.state
-
-    def getSystemManagerNodeName(self):
-        """
-        Get node name of the active system manager
-
-        :returns: node name
-        :rtype: str
-        """
-        return self.resolveAlias("system-manager")
-
-    @abstractmethod
-    def getTargetState(self, node, name=None):
-        """
-        Get the target state of a node or device manager.
-
-        :param node: node
-        :type node: str
-        :param name: device manager name
-        :type name: str
-        :returns: :class:`~c4.system.configuration.States`
-        """
 
     @abstractmethod
     def getNode(self, node, includeDevices=True, flatDeviceHierarchy=False):
@@ -341,6 +281,97 @@ class Configuration(object):
         """
         Return a list of node names.
         """
+
+    @abstractmethod
+    def getPlatform(self):
+        """
+        Get platform information
+
+        :returns: platform
+        :rtype: :class:`~c4.system.configuration.PlatformInfo`
+        """
+
+    @abstractmethod
+    def getProperty(self, node, name, propertyName):
+        """
+        Get the property of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param propertyName: property name
+        :type propertyName: str
+        :returns: str
+        """
+
+    @abstractmethod
+    def getProperties(self, node, name=None):
+        """
+        Get the properties of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: properties or ``None`` if node or device does not exist
+        :rtype: dict
+        """
+
+    def getRole(self, node):
+        """
+        Get the role of a system manager.
+
+        :param node: node
+        :type node: str
+        :returns: role
+        :rtype: :class:`Roles`
+        """
+        info = self.getNode(node, includeDevices=False)
+        if info is None:
+            self.log.error("could not get role because '%s' does not exist", node)
+            return None
+        return info.role
+
+    def getState(self, node, name=None):
+        """
+        Get the state of a system or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: :class:`~c4.system.configuration.States`
+        """
+        if name:
+            info = self.getDevice(node, name)
+        else:
+            info = self.getNode(node, includeDevices=False)
+        if info is None:
+            self.log.error("could not get state because '%s%s' does not exist", node, "/" + name if name else "")
+            return None
+        return info.state
+
+    def getSystemManagerNodeName(self):
+        """
+        Get node name of the active system manager
+
+        :returns: node name
+        :rtype: str
+        """
+        return self.resolveAlias("system-manager")
+
+    def getTargetState(self, node, name=None):
+        """
+        Get the target state of a node or device manager.
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: :class:`~c4.system.configuration.States`
+        """
+        return self.getProperty(node, name, "targetState")
 
     def loadFromInfo(self, configurationInfo):
         """
@@ -378,6 +409,18 @@ class Configuration(object):
         """
 
     @abstractmethod
+    def removeProperty(self, node, name, propertyName):
+        """
+        Remove property property from a system or device manager
+
+        :param node: node
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param property: property
+        :type property: str
+        """
+
     def removeTargetState(self, node, name=None):
         """
         Remove target state from a system or device manager
@@ -387,6 +430,7 @@ class Configuration(object):
         :param name: device manager name
         :type name: str
         """
+        self.removeProperty(node, name, "targetState")
 
     @abstractmethod
     def resetDeviceStates(self):
@@ -405,14 +449,6 @@ class Configuration(object):
         :returns: node name
         :rtype: str
         """
-        rows = self.database.query("""
-            select node_name from t_sm_configuration_alias
-            where alias is ?""",
-            (alias,))
-        if rows:
-            return rows[0]["node_name"]
-        else:
-            None
 
     def toInfo(self):
         """
@@ -657,29 +693,21 @@ class DeviceInfo(JSONSerializable):
     :type deviceType: str
     :param state: state
     :type state: :class:`~c4.system.configuration.States`
-    :param deviceId: database id
-    :type deviceId: int
-    :param parentId: parent database id
-    :type parentId: int
     """
-    def __init__(self, name, deviceType, state=States.REGISTERED, deviceId=-1, parentId=None):
-        self.id = deviceId
-        self.parentId = parentId
-        self.name = name
-        self.details = {
-            "properties": {}
-        }
+    def __init__(self, name, deviceType, state=States.REGISTERED):
         self.devices = {}
-        self.type = deviceType
+        self.name = name
+        self.properties = {}
         self.state = state
+        self.type = deviceType
 
     def __eq__(self, other):
         if (isinstance(other, DeviceInfo)
-            and self.details == other.details
-            and self.devices == other.devices
-            and self.name == other.name
-            and self.state == other.state
-            and self.type == other.type):
+                and self.devices == other.devices
+                and self.properties == other.properties
+                and self.name == other.name
+                and self.state == other.state
+                and self.type == other.type):
             return True
         return False
 
@@ -700,39 +728,11 @@ class DeviceInfo(JSONSerializable):
             self.devices[device.name] = device
         return self
 
-    @classmethod
-    def fromJSONSerializable(clazz, d):
-        if JSONSerializable.dictHasType(d, DeviceInfo):
-            deviceInfo = DeviceInfo(d["name"], d["type"], States.REGISTERED)
-            deviceInfo.devices = d.get("devices", {})
-            deviceInfo.properties = d.get("properties", {})
-            return deviceInfo
-        return JSONSerializable.fromJSONSerializable(d)
-
-    @property
-    def properties(self):
-        return self.details.get("properties", {})
-
-    @properties.setter
-    def properties(self, properties):
-        self.details["properties"] = properties
-
     def toJSONSerializable(self, includeClassInfo=False):
-        serializableDict = JSONSerializable.toJSONSerializable(self, includeClassInfo=includeClassInfo)
-        # add properties
-        serializableDict["properties"] = self.properties
+        serializableDict = super(DeviceInfo, self).toJSONSerializable(includeClassInfo=includeClassInfo)
+        # remove empty properties
         if not serializableDict["properties"]:
             del serializableDict["properties"]
-        # remove database and transient information
-        if "id" in serializableDict:
-            del serializableDict["id"]
-        if "parentId" in serializableDict:
-            del serializableDict["parentId"]
-        del serializableDict["state"]
-        # remove properties from details
-        del serializableDict["details"]["properties"]
-        if not serializableDict["details"]:
-            del serializableDict["details"]
         if not serializableDict["devices"]:
             del serializableDict["devices"]
         return serializableDict
@@ -749,25 +749,23 @@ class NodeInfo(JSONSerializable):
     :type role: :class:`~c4.system.configuration.Roles`
     :param state: state
     :type state: :class:`~c4.system.configuration.States`
-    :param nodeId: database id
-    :type nodeId: int
     """
-    def __init__(self, name, address, role=Roles.THIN, state=States.DEPLOYED, nodeId=-1):
-        self.id = nodeId
-        self.name = name
-        self.details = {
-            "address": address,
-            "role": role.name
-        }
+    def __init__(self, name, address, role=Roles.THIN, state=States.DEPLOYED):
         self.devices = {}
+        self.name = name
+        self.properties = {
+            "address": address
+        }
+        self.role = role
         self.state = state
 
     def __eq__(self, other):
         if (isinstance(other, NodeInfo)
-            and self.name == other.name
-            and self.details == other.details
-            and self.devices == other.devices
-            and self.state == other.state):
+                and self.name == other.name
+                and self.role == other.role
+                and self.state == other.state
+                and self.devices == other.devices
+                and self.properties == other.properties):
             return True
         return False
 
@@ -776,11 +774,11 @@ class NodeInfo(JSONSerializable):
 
     @property
     def address(self):
-        return self.details["address"]
+        return self.properties["address"]
 
     @address.setter
     def address(self, address):
-        self.details["address"] = address
+        self.properties["address"] = address
 
     def addDevice(self, device):
         """
@@ -796,54 +794,11 @@ class NodeInfo(JSONSerializable):
             self.devices[device.name] = device
         return self
 
-    @classmethod
-    def fromJSONSerializable(clazz, d):
-        if JSONSerializable.dictHasType(d, NodeInfo):
-            nodeInfo = NodeInfo(d["name"],
-                                d["address"],
-                                role=d.get("role", Roles.THIN),
-                                state=d.get("state", States.DEPLOYED))
-            nodeInfo.devices = d.get("devices", {})
-            return nodeInfo
-        return JSONSerializable.fromJSONSerializable(d)
-
-    # FIXME: check if necessary
-    def isDeviceRunning(self, deviceName):
-        """
-        Returns True if the given device is started, False otherwise
-        """
-        if deviceName in self.devices:
-            deviceInfo = self.devices[deviceName]
-            if deviceInfo.state == States.RUNNING:
-                return True
-        return False
-
-    @property
-    def role(self):
-        return Roles.valueOf(self.details["role"])
-
-    @role.setter
-    def role(self, role):
-        if isinstance(role, Roles):
-            self.details["role"] = role.name
-        else:
-            self.log.error("'%s' does not match enum of type '%s'", role, Roles)
-
     def toJSONSerializable(self, includeClassInfo=False):
-        serializableDict = JSONSerializable.toJSONSerializable(self, includeClassInfo=includeClassInfo)
-        # add properties
-        serializableDict["address"] = self.address
-        serializableDict["role"] = self.role
-        # remove database and transient information
-        if "id" in serializableDict:
-            del serializableDict["id"]
-        # TODO: check where needed
-#         del serializableDict["state"]
-        # remove properties from details
-        del serializableDict["details"]["address"]
-        del serializableDict["details"]["role"]
-        if not serializableDict["details"]:
-            del serializableDict["details"]
+        serializableDict = super(NodeInfo, self).toJSONSerializable(includeClassInfo=includeClassInfo)
+        # remove empty properties
+        if not serializableDict["properties"]:
+            del serializableDict["properties"]
         if not serializableDict["devices"]:
             del serializableDict["devices"]
         return serializableDict
@@ -869,10 +824,10 @@ class PlatformInfo(JSONSerializable):
 
     def __eq__(self, other):
         if (isinstance(other, PlatformInfo)
-            and self.name == other.name
-            and self.description == other.description
-            and self.settings == other.settings
-            and self.type == other.type):
+                and self.name == other.name
+                and self.description == other.description
+                and self.settings == other.settings
+                and self.type == other.type):
             return True
         return False
 

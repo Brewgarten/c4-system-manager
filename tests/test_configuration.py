@@ -3,24 +3,27 @@ import logging
 import pytest
 
 from c4.system.backend import Backend
-from c4.system.configuration import DeviceInfo, NodeInfo, PlatformInfo, Roles, States, \
-    ConfigurationInfo, ConfigurationMissingSystemManagerAliasError, \
-    ConfigurationNameMismatchError, ConfigurationMissingAliasNodeError, \
-    ConfigurationMissingActiveNodeError, ConfigurationTooManyActiveNodesError
+from c4.system.configuration import (ConfigurationInfo, ConfigurationMissingSystemManagerAliasError,
+                                     ConfigurationNameMismatchError, ConfigurationMissingAliasNodeError,
+                                     ConfigurationMissingActiveNodeError, ConfigurationTooManyActiveNodesError,
+                                     DeviceInfo,
+                                     NodeInfo,
+                                     PlatformInfo,
+                                     Roles,
+                                     States)
 
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.usefixtures("temporaryBackend")
 
 @pytest.fixture
 def nodes():
     """
     Basic set of nodes
     """
-    node1 = NodeInfo("node1", "tcp://1.2.3.4:5000", Roles.ACTIVE)
-    node2 = NodeInfo("node2", "tcp://5.6.7.8:5000", Roles.PASSIVE)
-    node3 = NodeInfo("node3", "tcp://9.10.11.12:5000", Roles.THIN)
+    node1 = NodeInfo("node1", "tcp://1.2.3.4:5000", role=Roles.ACTIVE)
+    node2 = NodeInfo("node2", "tcp://5.6.7.8:5000", role=Roles.PASSIVE)
+    node3 = NodeInfo("node3", "tcp://9.10.11.12:5000", role=Roles.THIN)
     systemSetup = {
        node1.name: node1,
        node2.name: node2,
@@ -28,7 +31,7 @@ def nodes():
     }
     return systemSetup
 
-def test_aliases(nodes):
+def test_aliases(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -53,7 +56,7 @@ def test_aliases(nodes):
     # check shortcut system manager alias
     assert configuration.getSystemManagerNodeName() == nodes["node2"].name
 
-def test_clear(nodes):
+def test_clear(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -71,7 +74,7 @@ def test_clear(nodes):
     assert set(configuration.getNodeNames()) == set()
 
     # check that aliases are cleared
-    assert configuration.getSystemManagerNodeName() == None
+    assert configuration.getSystemManagerNodeName() is None
 
     # check that platform is cleared
     platformInfo = configuration.getPlatform()
@@ -80,7 +83,7 @@ def test_clear(nodes):
     assert platformInfo.description != platform.description
     assert platformInfo.settings != platform.settings
 
-def test_clusterInfo(nodes):
+def test_clusterInfo(backend, nodes):
 
     # setup test configuration
     configuration = Backend().configuration
@@ -138,32 +141,31 @@ def test_clusterInfo(nodes):
 #     assert dbClusterInfo.state == States.DEPLOYED
 #     assert dbClusterInfo.systemManagerAddress == nodes["node1"].address
 
-def test_details(nodes):
+def test_properties(backend, nodes):
 
     configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
-    # change a node detail
-    assert configuration.changeDetail(nodes["node1"].name, None, "address", "tcp://1.1.1.1:10000") == nodes["node1"].address
-    rowId, details = configuration.getDetails(nodes["node1"].name)
-    assert rowId > 0
-    assert details == {"role": nodes["node1"].role.name, "address": "tcp://1.1.1.1:10000"}
+    # change a node property
+    assert configuration.changeProperty(nodes["node1"].name, None, "address", "tcp://1.1.1.1:10000") == nodes["node1"].address
+    properties = configuration.getProperties(nodes["node1"].name)
+    assert properties == {"address": "tcp://1.1.1.1:10000"}
 
-    # check node detail that does not exist
-    assert configuration.changeDetail(nodes["node1"].name, None, "nonExistingDetail", "test") is None
-    assert configuration.getDetail(nodes["node1"].name, None, "nonExistingDetail") is None
-    assert configuration.changeDetail(nodes["node1"].name, None, "nonExistingDetail", "test", setIfNotExist=True) is None
-    assert configuration.getDetail(nodes["node1"].name, None, "nonExistingDetail") == "test"
+    # check node property that does not exist
+    assert configuration.changeProperty(nodes["node1"].name, None, "nonExistingProperty", "test") is None
+    assert configuration.getProperty(nodes["node1"].name, None, "nonExistingProperty") is None
+    assert configuration.changeProperty(nodes["node1"].name, None, "nonExistingProperty", "test", setIfNotExist=True) is None
+    assert configuration.getProperty(nodes["node1"].name, None, "nonExistingProperty") == "test"
 
-    # add a new node detail
-    configuration.changeDetail(nodes["node1"].name, None, "testDetail", "test", setIfNotExist=True)
-    assert configuration.getDetail(nodes["node1"].name, None, "testDetail") == "test"
+    # add a new node property
+    configuration.changeProperty(nodes["node1"].name, None, "testProperty", "test", setIfNotExist=True)
+    assert configuration.getProperty(nodes["node1"].name, None, "testProperty") == "test"
 
-    # remove a node detail
-    configuration.removeDetail(nodes["node1"].name, None, "testDetail")
-    configuration.removeDetail(nodes["node1"].name, None, "nonExistingDetail")
-    assert configuration.getDetail(nodes["node1"].name, None, "testDetail") is None
+    # remove a node property
+    configuration.removeProperty(nodes["node1"].name, None, "testProperty")
+    configuration.removeProperty(nodes["node1"].name, None, "nonExistingProperty")
+    assert configuration.getProperty(nodes["node1"].name, None, "testProperty") is None
 
     configuration.addNode(nodes["node2"])
 
@@ -171,23 +173,22 @@ def test_details(nodes):
     disk.properties["disks"] = "*"
     configuration.addDevice(nodes["node2"].name, "disk", disk)
 
-    # change a device detail
-    assert configuration.changeDetail(nodes["node2"].name, disk.name, "properties", {"disks": "sda"}) == disk.properties
-    rowId, details = configuration.getDetails(nodes["node2"].name, disk.name)
-    assert rowId > 0
-    assert details == {"properties": {"disks": "sda"}}
+    # change a device property
+    assert configuration.changeProperty(nodes["node2"].name, disk.name, "disks", "sda") == disk.properties["disks"]
+    properties = configuration.getProperties(nodes["node2"].name, disk.name)
+    assert properties == {"disks": "sda"}
 
-    # check device detail that does not exist
-    assert configuration.changeDetail(nodes["node2"].name, disk.name, "nonExistingDetail", "test") is None
-    assert configuration.getDetail(nodes["node2"].name, None, "nonExistingDetail") is None
-    assert configuration.changeDetail(nodes["node2"].name, None, "nonExistingDetail", "test", setIfNotExist=True) is None
-    assert configuration.getDetail(nodes["node2"].name, None, "nonExistingDetail") == "test"
+    # check device property that does not exist
+    assert configuration.changeProperty(nodes["node2"].name, disk.name, "nonExistingProperty", "test") is None
+    assert configuration.getProperty(nodes["node2"].name, None, "nonExistingProperty") is None
+    assert configuration.changeProperty(nodes["node2"].name, None, "nonExistingProperty", "test", setIfNotExist=True) is None
+    assert configuration.getProperty(nodes["node2"].name, None, "nonExistingProperty") == "test"
 
-    configuration.removeDetail(nodes["node2"].name, disk.name, "properties")
-    configuration.removeDetail(nodes["node2"].name, disk.name, "nonExistingDetail")
-    assert configuration.getDetail(nodes["node2"].name, disk.name, "properties") is None
+    configuration.removeProperty(nodes["node2"].name, disk.name, "properties")
+    configuration.removeProperty(nodes["node2"].name, disk.name, "nonExistingProperty")
+    assert configuration.getProperty(nodes["node2"].name, disk.name, "properties") is None
 
-def test_devices(nodes):
+def test_devices(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -196,16 +197,14 @@ def test_devices(nodes):
 
     db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
     db2Info = configuration.addDevice(nodes["node1"].name, "db2", db2)
-    assert db2Info.id > 0
-    assert db2Info.parentId > 0
+    assert db2Info
+
     # cannot add the same device twice
     assert configuration.addDevice(nodes["node1"].name, "db2", db2) is None
     node1DeviceNames.add("db2")
 
     # check that we can get the device
     db2DeviceInfo = configuration.getDevice(nodes["node1"].name, "db2")
-    assert db2DeviceInfo.id > 0
-    assert db2DeviceInfo.parentId > 0
     assert db2DeviceInfo.name == db2.name
     assert db2DeviceInfo.properties == db2.properties
     assert db2DeviceInfo.devices == db2.devices
@@ -225,23 +224,19 @@ def test_devices(nodes):
     configuration.addDevice(nodes["node1"].name, "parent", parentDevice)
 
     node1Devices = configuration.getDevices(nodes["node1"].name, flatDeviceHierarchy=True)
-    assert node1Devices["parent"].id > 0
-    assert node1Devices["parent"].parentId > 0
+    assert node1Devices["parent"]
     for childNumber in range(4):
-        assert node1Devices["parent.child{0}".format(childNumber+1)].id > 0
-        assert node1Devices["parent.child{0}".format(childNumber+1)].parentId > 0
+        assert node1Devices["parent.child{0}".format(childNumber+1)]
 
     db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
     db2Instance1Info = configuration.addDevice(nodes["node1"].name, "db2.instance1", db2Instance1)
-    assert db2Instance1Info.id > 0
-    assert db2Instance1Info.parentId > 0
+    assert db2Instance1Info
     node1DeviceNames.add("db2.instance1")
 
     for mlnNumber in range(4):
         mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
         mlnInfo = configuration.addDevice(nodes["node1"].name, "db2.instance1.{0}".format(mln.name), mln)
-        assert mlnInfo.id > 0
-        assert mlnInfo.parentId > 0
+        assert mlnInfo
         node1DeviceNames.add("db2.instance1.{0}".format(mln.name))
 
     node1Info = configuration.getNode(nodes["node1"].name)
@@ -265,23 +260,22 @@ def test_devices(nodes):
 
     cpu = DeviceInfo("cpu", "c4.devices.cpu.Cpu")
     cpuInfo = configuration.addDevice(nodes["node2"].name, "cpu", cpu)
-    assert cpuInfo.id > 0
-    assert cpuInfo.parentId > 0
+    assert cpuInfo
 
     disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     disk.properties["disks"] = "*"
     diskInfo = configuration.addDevice(nodes["node2"].name, "disk", disk)
-    assert diskInfo.id > 0
-    assert diskInfo.parentId > 0
+    assert diskInfo
 
     memory = DeviceInfo("memory", "c4.devices.mem.Memory")
     memoryInfo = configuration.addDevice(nodes["node2"].name, "memory", memory)
-    assert memoryInfo.id > 0
-    assert memoryInfo.parentId > 0
+    assert memoryInfo
 
     node2Info = configuration.getNode(nodes["node2"].name)
     assert node2Info.devices["cpu"]
     assert node2Info.devices["disk"]
+    log.fatal(node2Info.devices["disk"])
+    log.fatal(node2Info.devices["disk"].properties)
     assert node2Info.devices["disk"].properties["disks"] == "*"
     assert node2Info.devices["memory"]
 
@@ -290,8 +284,7 @@ def test_devices(nodes):
     configuration.removeDevice(nodes["node1"].name, "nonExistingDevice")
     assert configuration.getDevice(nodes["node1"].name, "db2") is None
 
-
-def test_devices_no_sqlite_cte(nodes, monkeypatch):
+def test_devices_no_sqlite_cte(monkeypatch, nodes, temporaryBackend):
     """
     Test without support for common table expressions
     """
@@ -303,16 +296,16 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
 
     db2 = DeviceInfo("db2", "c4.devices.db2.DB2")
     db2Info = configuration.addDevice(nodes["node1"].name, "db2", db2)
-    assert db2Info.id > 0
-    assert db2Info.parentId > 0
+    assert db2Info._id > 0
+    assert db2Info._parentId > 0
     # cannot add the same device twice
     assert configuration.addDevice(nodes["node1"].name, "db2", db2) is None
     node1DeviceNames.add("db2")
 
     # check that we can get the device
     db2DeviceInfo = configuration.getDevice(nodes["node1"].name, "db2")
-    assert db2DeviceInfo.id > 0
-    assert db2DeviceInfo.parentId > 0
+    assert db2DeviceInfo._id > 0
+    assert db2DeviceInfo._parentId > 0
     assert db2DeviceInfo.name == db2.name
     assert db2DeviceInfo.properties == db2.properties
     assert db2DeviceInfo.devices == db2.devices
@@ -332,23 +325,23 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
     configuration.addDevice(nodes["node1"].name, "parent", parentDevice)
 
     node1Devices = configuration.getDevices(nodes["node1"].name, flatDeviceHierarchy=True)
-    assert node1Devices["parent"].id > 0
-    assert node1Devices["parent"].parentId > 0
+    assert node1Devices["parent"]._id > 0
+    assert node1Devices["parent"]._parentId > 0
     for childNumber in range(4):
-        assert node1Devices["parent.child{0}".format(childNumber+1)].id > 0
-        assert node1Devices["parent.child{0}".format(childNumber+1)].parentId > 0
+        assert node1Devices["parent.child{0}".format(childNumber+1)]._id > 0
+        assert node1Devices["parent.child{0}".format(childNumber+1)]._parentId > 0
 
     db2Instance1 = DeviceInfo("instance1", "c4.devices.db2.Instance")
     db2Instance1Info = configuration.addDevice(nodes["node1"].name, "db2.instance1", db2Instance1)
-    assert db2Instance1Info.id > 0
-    assert db2Instance1Info.parentId > 0
+    assert db2Instance1Info._id > 0
+    assert db2Instance1Info._parentId > 0
     node1DeviceNames.add("db2.instance1")
 
     for mlnNumber in range(4):
         mln = DeviceInfo("mln{0}".format(mlnNumber+1), "c4.devices.db2.MLN")
         mlnInfo = configuration.addDevice(nodes["node1"].name, "db2.instance1.{0}".format(mln.name), mln)
-        assert mlnInfo.id > 0
-        assert mlnInfo.parentId > 0
+        assert mlnInfo._id > 0
+        assert mlnInfo._parentId > 0
         node1DeviceNames.add("db2.instance1.{0}".format(mln.name))
 
     node1Info = configuration.getNode(nodes["node1"].name)
@@ -372,19 +365,19 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
 
     cpu = DeviceInfo("cpu", "c4.devices.cpu.Cpu")
     cpuInfo = configuration.addDevice(nodes["node2"].name, "cpu", cpu)
-    assert cpuInfo.id > 0
-    assert cpuInfo.parentId > 0
+    assert cpuInfo._id > 0
+    assert cpuInfo._parentId > 0
 
     disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     disk.properties["disks"] = "*"
     diskInfo = configuration.addDevice(nodes["node2"].name, "disk", disk)
-    assert diskInfo.id > 0
-    assert diskInfo.parentId > 0
+    assert diskInfo._id > 0
+    assert diskInfo._parentId > 0
 
     memory = DeviceInfo("memory", "c4.devices.mem.Memory")
     memoryInfo = configuration.addDevice(nodes["node2"].name, "memory", memory)
-    assert memoryInfo.id > 0
-    assert memoryInfo.parentId > 0
+    assert memoryInfo._id > 0
+    assert memoryInfo._parentId > 0
 
     node2Info = configuration.getNode(nodes["node2"].name)
     assert node2Info.devices["cpu"]
@@ -397,7 +390,7 @@ def test_devices_no_sqlite_cte(nodes, monkeypatch):
     configuration.removeDevice(nodes["node1"].name, "nonExistingDevice")
     assert configuration.getDevice(nodes["node1"].name, "db2") is None
 
-def test_json(nodes):
+def test_json(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -449,15 +442,14 @@ def test_json(nodes):
     configurationJSONString = configurationInfo.toJSON(includeClassInfo=True, pretty=True)
     loadedConfigurationInfo = ConfigurationInfo.fromJSON(configurationJSONString)
 
-    # check that database and transient information is reset
+    # check that transient information is reset
     for loadedNodeInfo in loadedConfigurationInfo.nodes.values():
-        assert loadedNodeInfo.id < 0
+        assert loadedNodeInfo
         assert loadedNodeInfo.state == States.DEPLOYED
 
-    # check that database and transient information is reset
+    # check that transient information is reset
     loadedDB2Info = loadedConfigurationInfo.nodes["node1"].devices["db2"]
-    assert loadedDB2Info.id < 0
-    assert loadedDB2Info.parentId is None
+    assert loadedDB2Info
 
     # make sure that loaded configuration info matches existing configuration
     assert loadedConfigurationInfo.aliases == configuration.getAliases()
@@ -494,8 +486,6 @@ def test_jsonInfos():
     device1JSON = device1.toJSON(includeClassInfo=True, pretty=True)
 
     loadedDevice1 = DeviceInfo.fromJSON(device1JSON)
-    assert loadedDevice1.id == -1
-    assert loadedDevice1.parentId == None
     assert loadedDevice1.name == device1.name
     assert loadedDevice1.type == device1.type
     assert loadedDevice1.state == device1.state
@@ -507,8 +497,6 @@ def test_jsonInfos():
 
     loadedDevice1 = DeviceInfo.fromJSON(device1JSON)
     assert isinstance(loadedDevice1.devices["child"], DeviceInfo)
-    assert loadedDevice1.devices["child"].id == -1
-    assert loadedDevice1.devices["child"].parentId == None
     assert loadedDevice1.devices["child"].name == device1Child.name
     assert loadedDevice1.devices["child"].type == device1Child.type
     assert loadedDevice1.devices["child"].state == device1Child.state
@@ -521,7 +509,7 @@ def test_jsonInfos():
     assert isinstance(loadedNode1.devices[device1.name], DeviceInfo)
     assert isinstance(loadedNode1.devices[device1.name].devices[device1Child.name], DeviceInfo)
 
-def test_nodes(nodes):
+def test_nodes(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -535,7 +523,7 @@ def test_nodes(nodes):
     for node in nodes.values():
 
         nodeInfo = configuration.addNode(node)
-        assert nodeInfo.id > 0
+        assert nodeInfo
 
         nodeInfo = configuration.getNode(node.name)
         assert nodeInfo.name == node.name
@@ -564,18 +552,17 @@ def test_nodes(nodes):
     nodeInfo = configuration.getNode(nodes["node1"].name, includeDevices=True, flatDeviceHierarchy=True)
     assert nodeInfo.devices
     parentDevice = nodeInfo.devices["parent"]
-    assert parentDevice.id > 0
+    assert parentDevice
     for childNumber in range(5):
         childDevice = nodeInfo.devices["parent.child{0}".format(childNumber+1)]
-        assert childDevice.id > 0
-        assert childDevice.parentId == parentDevice.id
+        assert childDevice
 
     # remove node and its devices
     configuration.removeNode(nodes["node1"].name)
     configuration.removeNode("nonExistingNode")
     assert configuration.getNode(nodes["node1"].name) is None
 
-def test_platform():
+def test_platform(backend):
 
     configuration = Backend().configuration
     platform = PlatformInfo("im-devops", "c4.system.platforms.devops.IMDevOps", "development platform", {"test": 0})
@@ -588,7 +575,7 @@ def test_platform():
     assert platformInfo.description == platform.description
     assert platformInfo.settings == platform.settings
 
-def test_resetDeviceStates(nodes):
+def test_resetDeviceStates(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -614,7 +601,7 @@ def test_resetDeviceStates(nodes):
     for deviceInfo in devices.values():
         assert deviceInfo.state == States.REGISTERED
 
-def test_roles(nodes):
+def test_roles(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -631,7 +618,7 @@ def test_roles(nodes):
     # check non existing node
     assert configuration.getRole("nonExistingNode") is None
 
-def test_states(nodes):
+def test_states(backend, nodes):
 
     configuration = Backend().configuration
 
@@ -662,22 +649,22 @@ def test_states(nodes):
     assert configuration.getState(nodes["node1"].name, "db2") == States.REGISTERED
 
     # node does not exist
-    assert configuration.changeState("testNode", None, States.RUNNING) == None
-    assert configuration.getState("testNode", None) == None
+    assert configuration.changeState("testNode", None, States.RUNNING) is None
+    assert configuration.getState("testNode", None) is None
 
     # device does not exist
-    assert configuration.changeState(nodes["node1"].name, "testDevice", States.RUNNING) == None
-    assert configuration.getState(nodes["node1"].name, "testDevice") == None
+    assert configuration.changeState(nodes["node1"].name, "testDevice", States.RUNNING) is None
+    assert configuration.getState(nodes["node1"].name, "testDevice") is None
 
-def test_targetStates(nodes):
+def test_targetStates(backend, nodes):
 
     configuration = Backend().configuration
 
     configuration.addNode(nodes["node1"])
 
-    assert configuration.changeTargetState(nodes["node1"].name, None, States.MAINTENANCE) == None
+    assert configuration.changeTargetState(nodes["node1"].name, None, States.MAINTENANCE) is None
     # check node that does not exist
-    assert configuration.changeTargetState("nonExistingNode", None, States.MAINTENANCE) == None
+    assert configuration.changeTargetState("nonExistingNode", None, States.MAINTENANCE) is None
 
     assert configuration.getTargetState(nodes["node1"].name) == States.MAINTENANCE
     # check node that does not exist
@@ -689,9 +676,9 @@ def test_targetStates(nodes):
     disk = DeviceInfo("disk", "c4.devices.disk.Disk")
     configuration.addDevice(nodes["node1"].name, "disk", disk)
 
-    assert configuration.changeTargetState(nodes["node1"].name, disk.name, States.MAINTENANCE) == None
+    assert configuration.changeTargetState(nodes["node1"].name, disk.name, States.MAINTENANCE) is None
     # check device that does not exist
-    assert configuration.changeTargetState(nodes["node1"].name, "nonExistingDevice", States.MAINTENANCE) == None
+    assert configuration.changeTargetState(nodes["node1"].name, "nonExistingDevice", States.MAINTENANCE) is None
 
     assert configuration.getTargetState(nodes["node1"].name, disk.name) == States.MAINTENANCE
     # check device that does not exist
@@ -700,7 +687,7 @@ def test_targetStates(nodes):
     configuration.removeTargetState(nodes["node1"].name, disk.name)
     assert configuration.getTargetState(nodes["node1"].name, disk.name) is None
 
-def test_validation(nodes):
+def test_validation(backend, nodes):
 
     configurationInfo = ConfigurationInfo()
 
