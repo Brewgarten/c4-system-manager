@@ -651,7 +651,7 @@ class SharedSqliteDBConfiguration(Configuration):
             json.loads(data.get("settings", "{}"))
         )
 
-    def getProperty(self, node, name, propertyName):
+    def getProperty(self, node, name, propertyName, default=None):
         """
         Get the property of a system or device manager.
 
@@ -661,12 +661,13 @@ class SharedSqliteDBConfiguration(Configuration):
         :type name: str
         :param propertyName: property name
         :type propertyName: str
-        :returns: str
+        :param default: default value to return if property does not exist
+        :returns: property value
         """
         rowId, details = self._getDetails(node, name)
         if rowId < 0:
-            self.log.error("could not get details because '%s%s' does not exist", node, "/" + name if name else "")
-        return details.get(propertyName)
+            return default
+        return details.get(propertyName, default)
 
     def getProperties(self, node, name=None):
         """
@@ -888,8 +889,6 @@ class SharedSqliteDBConfiguration(Configuration):
         if propertyName in details:
             del details[propertyName]
             self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
-        else:
-            self.log.error("could not remove '%s' from '%s/%s' because it does not exist", propertyName, node, name)
 
     def resetDeviceStates(self):
         """

@@ -1,5 +1,6 @@
-from abc import abstractproperty, ABCMeta, abstractmethod
+from abc import ABCMeta, abstractmethod, abstractproperty
 import logging
+import os
 
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
@@ -60,6 +61,39 @@ class BackendImplementation(object):
         :type state: :class:`~States`
         """
 
+    @staticmethod
+    def fromConfigFile(fileName):
+        """
+        Load implementation from the specified JSON config file
+
+        :param fileName: a file with the JSON object
+        :type fileName: str
+        :returns: implementation
+        :rtype: :class:`~BackendImplementation`
+        """
+        if not os.path.exists(fileName):
+            log.error("could not find backend configuration file '%s'", fileName)
+            return None
+        try:
+            backendInfo = BackendInfo.fromJSONFile(fileName)
+
+            # get class info
+            info = backendInfo.backend.split(".")
+            className = info.pop()
+            moduleName = ".".join(info)
+
+            # load class from module
+            log.info("loading backend implementation '%s' from module '%s'", className, moduleName)
+            module = __import__(moduleName, fromlist=[className])
+            clazz = getattr(module, className)
+
+            # create instance based off constructor
+            backendImplementation = clazz(backendInfo)
+            return backendImplementation
+        except Exception as e:
+            log.error("could not load backend from configuration file '%s' because '%s'", fileName, e)
+        return None
+
 class BackendInfo(JSONSerializable):
     """
     Backend information base class
@@ -77,3 +111,76 @@ class BackendInfo(JSONSerializable):
             self.properties = {}
         else:
             self.properties = properties
+
+class BackendKeyValueStore(object):
+    """
+    Backend key-value store
+    """
+    @abstractmethod
+    def delete(self, key):
+        """
+        Delete value at specified key
+
+        :param key: key
+        :type key: str
+        """
+
+    @abstractmethod
+    def deletePrefix(self, keyPrefix):
+        """
+        Delete all values with the specified key prefix
+
+        :param keyPrefix: key prefix
+        :type keyPrefix: str
+        """
+
+    @abstractmethod
+    def get(self, key, default=None):
+        """
+        Get value at specified key
+
+        :param key: key
+        :type key: str
+        :param default: default value to return if key not found
+        :returns: value or default value
+        :rtype: str
+        """
+
+    @abstractmethod
+    def getAll(self):
+        """
+        Get all key-value pairs
+
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+
+    @abstractmethod
+    def getPrefix(self, key):
+        """
+        Get all key-value pairs with the specified key prefix
+
+        :param key: key
+        :type key: str
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+
+    @abstractmethod
+    def put(self, key, value):
+        """
+        Put value at specified key
+
+        :param key: key
+        :type key: str
+        :param value: value
+        :type value: str
+        """
+
+    @abstractproperty
+    def transaction(self):
+        """
+        A transaction to perform puts and deletes in an atomic manner
+
+        :returns: transaction object
+        """

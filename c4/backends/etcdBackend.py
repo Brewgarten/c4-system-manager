@@ -4,17 +4,17 @@ etcd based backend implementation
 import re
 
 import etcd3
+import grpc
 
-from c4.system.backend import BackendImplementation
+from c4.system.backend import BackendKeyValueStore, BackendImplementation
 from c4.system.configuration import (Configuration,
                                      DeviceInfo,
                                      NodeInfo,
                                      PlatformInfo,
                                      Roles,
-                                     SharedClusterInfo,
                                      States)
-from c4.utils.logutil import ClassLogger
 from c4.utils.jsonutil import JSONSerializable
+from c4.utils.logutil import ClassLogger
 
 
 class EtcdBackend(BackendImplementation):
@@ -32,7 +32,7 @@ class EtcdBackend(BackendImplementation):
         """
         etcd client instance
         """
-        return etcd3.Etcd3Client(
+        return EtcdClient(
             host=self.info.properties.get("client.host", "localhost"),
             port=self.info.properties.get("client.port", 2379),
             ca_cert=self.info.properties.get("security.ca.path"),
@@ -48,8 +48,132 @@ class EtcdBackend(BackendImplementation):
         """
         return EtcdConfiguration(self.client)
 
+    @property
+    def keyValueStore(self):
+        """
+        etcd based key-value store instance
+        """
+        return EtcdKeyValueStore(self.client)
+
     def ClusterInfo(self, node, address, systemManagerAddress, role, state):
-        return SharedClusterInfo(self, node, address, systemManagerAddress, role, state)
+        return EtcdClusterInfo(self, node, address)
+
+class EtcdClient(etcd3.Etcd3Client):
+    """
+    Basic light-weight etcd client that does not automatically set up watcher
+    and management stubs in order avoid allocating resources unnecessarily
+    """
+    def __init__(self, host='localhost', port=2379,
+                 ca_cert=None, cert_key=None, cert_cert=None, timeout=None):
+        # note that we do not want to call super here to avoid creating instances for properties we do not need, e.g., watcher
+        url = '{host}:{port}'.format(host=host, port=port)
+
+        cert_params = [c is not None for c in (cert_cert, cert_key, ca_cert)]
+        if all(cert_params):
+            # all the cert parameters are set
+            credentials = self._get_secure_creds(ca_cert,
+                                                 cert_key,
+                                                 cert_cert)
+            self.uses_secure_channel = True
+            self.channel = grpc.secure_channel(url, credentials)
+        elif any(cert_params):
+            # some of the cert parameters are set
+            raise ValueError('the parameters cert_cert, cert_key and ca_cert '
+                             'must all be set to use a secure channel')
+        else:
+            self.uses_secure_channel = False
+            self.channel = grpc.insecure_channel(url)
+
+        self.timeout = timeout
+        self.kvstub = etcd3.etcdrpc.KVStub(self.channel)
+        # note that we do not create instances by default because we do not currently use them
+        self.watcher = None
+        self.clusterstub = None
+        self.leasestub = None
+        self.maintenancestub = None
+        self.transactions = etcd3.Transactions()
+
+# TODO: make this properly extend a common ClusterInfo class
+@ClassLogger
+class EtcdClusterInfo(object):
+    """
+    etcd backend cluster information implementation
+
+    :param backend: backend implementation
+    :type backend: :class:`~BackendImplementation`
+    :param node: node
+    :type node: str
+    :param address: address
+    :type address: str
+    """
+    def __init__(self, backend, node, address):
+        super(EtcdClusterInfo, self).__init__()
+        self.backend = backend
+        self.node = node
+        self.address = address
+
+    @property
+    def aliases(self):
+        """
+        Alias mappings
+        """
+        return self.backend.configuration.getAliases()
+
+    def getNodeAddress(self, node):
+        """
+        Get address for specified node
+
+        :param node: node
+        :type node: str
+        :returns: str or ``None`` if not found
+        """
+        if node == self.node:
+            return self.address
+        return self.backend.configuration.getAddress(node)
+
+    @property
+    def nodeNames(self):
+        """
+        Names of the nodes in the cluster
+        """
+        return self.backend.configuration.getNodeNames()
+
+    @property
+    def role(self):
+        """
+        Node role
+        """
+        return self.backend.configuration.getRole(self.node)
+
+    @role.setter
+    def role(self, role):
+        self.backend.configuration.changeRole(self.node, role)
+
+    @property
+    def state(self):
+        """
+        Node state
+        """
+        return self.backend.configuration.getState(self.node)
+
+    @state.setter
+    def state(self, state):
+        self.backend.configuration.changeState(self.node, None, state)
+
+    @property
+    def systemManagerAddress(self):
+        """
+        Active system manager address
+        """
+        configuration = self.backend.configuration
+        return configuration.getAddress(configuration.getSystemManagerNodeName())
+
+    @property
+    def systemManagerNodeName(self):
+        """
+        Active system manager node name
+        """
+        return self.backend.configuration.getSystemManagerNodeName()
 
 @ClassLogger
 class EtcdConfiguration(Configuration):
@@ -477,7 +601,7 @@ class EtcdConfiguration(Configuration):
             settings=settings
         )
 
-    def getProperty(self, node, name, propertyName):
+    def getProperty(self, node, name, propertyName, default=None):
         """
         Get the property of a system or device manager.
 
@@ -487,13 +611,13 @@ class EtcdConfiguration(Configuration):
         :type name: str
         :param propertyName: property name
         :type propertyName: str
-        :returns: str
+        :param default: default value to return if property does not exist
+        :returns: property value
         """
         propertyKey = self.getKey(node, name, "properties", propertyName)
         value, _ = self.client.get(propertyKey)
         if value is None:
-            self.log.error("could not get property because '%s%s' does not exist", node, "/" + name if name else "")
-            return None
+            return default
         return deserialize(value)
 
     def getProperties(self, node, name=None):
@@ -717,13 +841,11 @@ class EtcdConfiguration(Configuration):
             etcd3.transactions.Delete(key)
         ]
 
-        succeeded, _ = self.client.transaction(
+        self.client.transaction(
             compare=compare,
             success=success,
             failure=[]
         )
-        if not succeeded:
-            self.log.error("could not remove '%s' from '%s/%s' because it property does not exist", propertyName, node, name)
 
     def resetDeviceStates(self):
         """
@@ -751,6 +873,116 @@ class EtcdConfiguration(Configuration):
         aliasKey = "/aliases/{alias}".format(alias=alias)
         value, _ = self.client.get(aliasKey)
         return value
+
+@ClassLogger
+class EtcdKeyValueStore(BackendKeyValueStore):
+    """
+    etcd backend key-value store implementation
+
+    :param client: etcd client
+    :type client: :class:`~etcd3.Etcd3Client`
+    """
+    def __init__(self, client):
+        self.client = client
+
+    def delete(self, key):
+        """
+        Delete value at specified key
+
+        :param key: key
+        :type key: str
+        """
+        try:
+            self.client.delete(key)
+        except Exception as exception:
+            self.log.error(exception)
+
+    def deletePrefix(self, keyPrefix):
+        """
+        Delete all values with the specified key prefix
+
+        :param keyPrefix: key prefix
+        :type keyPrefix: str
+        """
+        try:
+            self.client.delete_prefix(keyPrefix)
+        except Exception as exception:
+            self.log.error(exception)
+
+    def get(self, key, default=None):
+        """
+        Get value at specified key
+
+        :param key: key
+        :type key: str
+        :param default: default value to return if key not found
+        :returns: value or default value
+        :rtype: str
+        """
+        try:
+            value, _ = self.client.get(key)
+            if value:
+                return value
+        except Exception as exception:
+            self.log.error(exception)
+        return default
+
+    def getAll(self):
+        """
+        Get all key-value pairs
+
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+        try:
+            return [
+                (metadata.key, value)
+                for value, metadata in self.client.get_all()
+            ]
+        except Exception as exception:
+            self.log.error(exception)
+        return []
+
+    def getPrefix(self, keyPrefix):
+        """
+        Get all key-value pairs with the specified key prefix
+
+        :param keyPrefix: key prefix
+        :type keyPrefix: str
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+        try:
+            return [
+                (metadata.key, value)
+                for value, metadata in self.client.get_prefix(keyPrefix)
+            ]
+        except Exception as exception:
+            self.log.error(exception)
+        return []
+
+    def put(self, key, value):
+        """
+        Put value at specified key
+
+        :param key: key
+        :type key: str
+        :param value: value
+        :type value: str
+        """
+        try:
+            self.client.put(key, value)
+        except Exception as exception:
+            self.log.error(exception)
+
+    @property
+    def transaction(self):
+        """
+        A transaction to perform puts and deletes in an atomic manner
+
+        :returns: transaction object
+        """
+        return EtcdTransaction(self.client)
 
 class EtcdValue(JSONSerializable):
     """
@@ -801,6 +1033,7 @@ class EtcdTransaction(object):
         :type key: str
         """
         self.statements.append(etcd3.transactions.Delete(key))
+        return self
 
     def put(self, key, value, lease=None):
         """
@@ -812,6 +1045,7 @@ class EtcdTransaction(object):
         :type value: str
         """
         self.statements.append(etcd3.transactions.Put(key, value, lease=lease))
+        return self
 
 def deserialize(value):
     """
@@ -838,7 +1072,7 @@ def serialize(value):
     its type
 
     - JSONSerializable values get converted into json strings
-    - strings stay strings
+    - strings stay strings except ones that contain '/' (slashes)
     - everything else gets wrapped in an EtcdValue
 
     :param value: value
@@ -846,6 +1080,6 @@ def serialize(value):
     """
     if isinstance(value, JSONSerializable):
         return value.toJSON(includeClassInfo=True)
-    elif isinstance(value, (str, unicode)):
+    elif isinstance(value, (str, unicode)) and "/" not in value:
         return value
     return EtcdValue(value).toJSON(includeClassInfo=True)

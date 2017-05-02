@@ -8,7 +8,6 @@ import time
 
 import pytest
 
-from c4.backends.etcdBackend import EtcdBackend
 from c4.backends.sharedSQLite import SharedSqliteDBBackend
 from c4.system.backend import Backend, BackendInfo
 from c4.system.configuration import (DeviceInfo,
@@ -21,12 +20,17 @@ from c4.system.manager import SystemManager
 logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
 log = logging.getLogger(__name__)
 
-@pytest.fixture(params=[EtcdBackend, SharedSqliteDBBackend])
+@pytest.fixture(params=["EtcdBackend", "SharedSqliteDBBackend"])
 def backend(request):
     """
     Parameterized testing backend
     """
-    if request.param == EtcdBackend:
+    if request.param == "EtcdBackend":
+
+        try:
+            from c4.backends.etcdBackend import EtcdBackend
+        except ImportError as importError:
+            pytest.skip("could not find etcd Python bindings: " + str(importError))
 
         if not os.path.exists("/opt/etcd/etcd"):
             pytest.skip("could not find etcd installation in '/opt/etcd/'")
@@ -63,7 +67,7 @@ def backend(request):
         info = BackendInfo("c4.backends.etcdBackend.EtcdBackend", properties=infoProperties)
         testBackendImplementation = EtcdBackend(info)
 
-    elif request.param == SharedSqliteDBBackend:
+    elif request.param == "SharedSqliteDBBackend":
 
         newpath = tempfile.mkdtemp(dir="/dev/shm")
         infoProperties = {

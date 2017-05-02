@@ -292,7 +292,7 @@ class Configuration(object):
         """
 
     @abstractmethod
-    def getProperty(self, node, name, propertyName):
+    def getProperty(self, node, name, propertyName, default=None):
         """
         Get the property of a system or device manager.
 
@@ -302,7 +302,8 @@ class Configuration(object):
         :type name: str
         :param propertyName: property name
         :type propertyName: str
-        :returns: str
+        :param default: default value to return if property does not exist
+        :returns: property value
         """
 
     @abstractmethod
@@ -698,7 +699,7 @@ class DeviceInfo(JSONSerializable):
         self.devices = {}
         self.name = name
         self.properties = {}
-        self.state = state
+        self.state = state or States.REGISTERED
         self.type = deviceType
 
     def __eq__(self, other):
@@ -756,8 +757,8 @@ class NodeInfo(JSONSerializable):
         self.properties = {
             "address": address
         }
-        self.role = role
-        self.state = state
+        self.role = role or Roles.THIN
+        self.state = state or States.DEPLOYED
 
     def __eq__(self, other):
         if (isinstance(other, NodeInfo)
@@ -817,9 +818,9 @@ class PlatformInfo(JSONSerializable):
     :type settings: dict
     """
     def __init__(self, name="unknown", platformType="c4.system.platforms.Unknown", description="", settings=None):
-        self.name = name
-        self.type = platformType
-        self.description = description
+        self.name = name or "unknown"
+        self.type = platformType or "c4.system.platforms.Unknown"
+        self.description = description or ""
         self.settings = settings or {}
 
     def __eq__(self, other):
