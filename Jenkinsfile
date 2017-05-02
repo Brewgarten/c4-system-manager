@@ -1,7 +1,7 @@
 pipeline {
   agent {
-    dockerfile {
-      filename "ci-environment.Dockerfile"
+    docker {
+      image "localhost:5000/centos-6-dynamite-python:2.2"
       label "docker"
     }
   }
@@ -20,30 +20,24 @@ pipeline {
         }
 
         // create dependency folder
-        sh "mkdir -p lib"
+        sh "mkdir -p lib/c4"
       }
     }
 
     stage("retrieve dependencies") {
       steps {
         parallel (
-          "messaging": {
-            dir("lib/messaging") {
+          "c4-messaging": {
+            dir("lib/c4/messaging") {
               git credentialsId: "github", url: "https://github.ibm.com/c4/messaging"
-              script {
-                latestTag = sh(returnStdout: true, script: "git describe --abbrev=0 --tags").trim()
-              }
-              sh "git checkout tags/" + latestTag
             }
+            sh 'cd lib/c4/messaging && git checkout tags/$(git describe --abbrev=0 --tags)'
           },
-          "utils": {
-            dir("lib/utils") {
+          "c4-utils": {
+            dir("lib/c4/utils") {
               git credentialsId: "github", url: "https://github.ibm.com/c4/utils"
-              script {
-                latestTag = sh(returnStdout: true, script: "git describe --abbrev=0 --tags").trim()
-              }
-              sh "git checkout tags/" + latestTag
             }
+            sh 'cd lib/c4/utils && git checkout tags/$(git describe --abbrev=0 --tags)'
           }
         )
       }
@@ -53,15 +47,15 @@ pipeline {
       steps {
         // set up virtual environment
         sh "rm -rf env"
-        sh "python -m virtualenv --system-site-packages env"
-        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/utils"
-        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/messaging"
+        sh "dynamite-python -m virtualenv --system-site-packages env"
+        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/c4/utils"
+        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/c4/messaging"
 
         // run analysis
         sh "rm -rf pylint.log"
-        sh "python -m pylint --version"
+        sh "env/bin/dynamite-python -m pylint --version"
         // TODO: once the initial errors are fixed we can avoid hack to always succeed
-        sh "env/bin/python -m pylint --output-format=parseable c4 > pylint.log || echo 0"
+        sh "env/bin/dynamite-python -m pylint --output-format=parseable dynamite > pylint.log || echo 0"
       }
       post {
         always {
@@ -81,13 +75,13 @@ pipeline {
       steps {
         // set up virtual environment
         sh "rm -rf env"
-        sh "python -m virtualenv --system-site-packages env"
-        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/utils"
-        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/messaging"
+        sh "dynamite-python -m virtualenv --system-site-packages env"
+        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/c4/utils"
+        sh "env/bin/pip install --disable-pip-version-check --no-cache-dir lib/c4/messaging"
 
         // run tests
         sh "rm -rf test_results && mkdir test_results"
-        sh "env/bin/python setup.py coverage"
+        sh "env/bin/dynamite-python setup.py coverage"
       }
       post {
         always {
@@ -110,7 +104,7 @@ pipeline {
       steps {
         // start with fresh dist folder
         sh "rm -rf dist"
-        sh "python setup.py sdist"
+        sh "dynamite-python setup.py sdist"
         dir("dist") {
           archive includes: "*"
         }
