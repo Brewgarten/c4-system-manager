@@ -13,6 +13,7 @@ from c4.system.configuration import (Configuration,
                                      PlatformInfo,
                                      Roles,
                                      States)
+from c4.utils.decorators import retry
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 
@@ -58,6 +59,8 @@ class EtcdBackend(BackendImplementation):
     def ClusterInfo(self, node, address, systemManagerAddress, role, state):
         return EtcdClusterInfo(self, node, address)
 
+@retry(attempts=3, interval=0.1, exceptions=(etcd3.exceptions.ConnectionFailedError,))
+@ClassLogger
 class EtcdClient(etcd3.Etcd3Client):
     """
     Basic light-weight etcd client that does not automatically set up watcher
