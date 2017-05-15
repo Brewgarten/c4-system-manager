@@ -4,6 +4,7 @@ etcd based backend implementation
 import re
 
 import etcd3
+from etcd3.client import _handle_errors, KVMetadata
 import grpc
 
 from c4.system.backend import BackendKeyValueStore, BackendImplementation
@@ -95,6 +96,77 @@ class EtcdClient(etcd3.Etcd3Client):
         self.leasestub = None
         self.maintenancestub = None
         self.transactions = etcd3.Transactions()
+
+    def _build_get_range_request(self, key,
+                                 range_end=None,
+                                 limit=None,
+                                 revision=None,
+                                 sort_order=None,
+                                 sort_target='key',
+                                 serializable=None,
+                                 keys_only=None,
+                                 count_only=None,
+                                 min_mod_revision=None,
+                                 max_mod_revision=None,
+                                 min_create_revision=None,
+                                 max_create_revision=None):
+        range_request = etcd3.etcdrpc.RangeRequest()
+        range_request.key = etcd3.utils.to_bytes(key)
+        if range_end is not None:
+            range_request.range_end = etcd3.utils.to_bytes(range_end)
+
+        # include limit
+        if limit is not None:
+            range_request.limit = limit
+
+        if sort_order is None:
+            range_request.sort_order = etcd3.etcdrpc.RangeRequest.NONE
+        elif sort_order == 'ascend':
+            range_request.sort_order = etcd3.etcdrpc.RangeRequest.ASCEND
+        elif sort_order == 'descend':
+            range_request.sort_order = etcd3.etcdrpc.RangeRequest.DESCEND
+        else:
+            raise ValueError('unknown sort order: "{}"'.format(sort_order))
+
+        if sort_target is None or sort_target == 'key':
+            range_request.sort_target = etcd3.etcdrpc.RangeRequest.KEY
+        elif sort_target == 'version':
+            range_request.sort_target = etcd3.etcdrpc.RangeRequest.VERSION
+        elif sort_target == 'create':
+            range_request.sort_target = etcd3.etcdrpc.RangeRequest.CREATE
+        elif sort_target == 'mod':
+            range_request.sort_target = etcd3.etcdrpc.RangeRequest.MOD
+        elif sort_target == 'value':
+            range_request.sort_target = etcd3.etcdrpc.RangeRequest.VALUE
+        else:
+            raise ValueError('sort_target must be one of "key", '
+                             '"version", "create", "mod" or "value"')
+
+        return range_request
+
+    @_handle_errors
+    def get_prefix(self, key_prefix, limit=None, sort_order=None, sort_target='key'):
+        """
+        Get a range of keys with a prefix.
+
+        :param key_prefix: first key in range
+
+        :returns: sequence of (value, metadata) tuples
+        """
+        range_request = self._build_get_range_request(
+            key=key_prefix,
+            range_end=etcd3.utils.increment_last_byte(etcd3.utils.to_bytes(key_prefix)),
+            limit=limit, # include limit
+            sort_order=sort_order,
+        )
+
+        range_response = self.kvstub.Range(range_request, self.timeout)
+
+        if range_response.count < 1:
+            return
+        else:
+            for kv in range_response.kvs:
+                yield (kv.value, KVMetadata(kv))
 
 # TODO: make this properly extend a common ClusterInfo class
 @ClassLogger
