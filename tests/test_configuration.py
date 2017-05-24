@@ -118,7 +118,9 @@ def test_clusterInfo(backend, nodes):
                                           States.DEPLOYED)
 
     # check db cluster information for ACTIVE role
-    assert dbClusterInfo.aliases == configuration.getAliases()
+    # need to check aliases individually because itearting over a shared dict isn't supported
+    for key, value in configuration.getAliases().iteritems():
+        assert dbClusterInfo.aliases[key] == value
     assert dbClusterInfo.getNodeAddress(nodes["node1"].name) == nodes["node1"].address
     assert dbClusterInfo.getNodeAddress(nodes["node2"].name) == nodes["node2"].address
     assert dbClusterInfo.getNodeAddress("system-manager") == nodes["node1"].address

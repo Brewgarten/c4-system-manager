@@ -29,7 +29,6 @@ from c4.system.messages import (DisableNode,
                                 LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
                                 RegistrationNotification,
                                 StartDeviceManagers, StartNode, StopNode)
-from c4.system.version import Version
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import getFullModuleName, getModuleClasses
@@ -39,7 +38,8 @@ from c4.system.backend import Backend, BackendInfo
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIGURATION_PATH = "/etc/c4"
+#TODO: make this configurable
+DEFAULT_CONFIGURATION_PATH = "/etc/dashdb-platform"
 
 NOT_RUNNING_ACTIONS = set([
     "RegistrationNotification",
@@ -78,7 +78,7 @@ class SystemManager(PeerRouter):
         :returns: whether start was successful
         :rtype: bool
         """
-        self.log.debug("starting system mananager '%s'", self.address)
+        self.log.info("starting system mananager '%s'", self.address)
         started = super(SystemManager, self).start(timeout=timeout)
         if not started:
             return False
@@ -121,7 +121,7 @@ class SystemManager(PeerRouter):
         :returns: whether stop was successful
         :rtype: bool
         """
-        self.log.debug("stopping system manager '%s'", self.address)
+        self.log.info("stopping system manager '%s'", self.address)
 
         # stop child device managers, this is required, otherwise device manager processes won't stop
         if self.clusterInfo.state == States.RUNNING:
@@ -238,11 +238,6 @@ class SystemManagerImplementation(object):
         else:
             self.log.error("Unsupported egg type: %s", egg_type)
 
-        # save version on active master only
-        if self.clusterInfo.role == Roles.ACTIVE:
-            version = getattr(new_mod, "__version__", "unknown")
-            Version.saveVersion(self.node, "", egg_type, version)
-
     def _handleUndeployEgg(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.UndeployDeviceManager` messages.
@@ -265,10 +260,6 @@ class SystemManagerImplementation(object):
         # all sysmgrs will now uninstall the egg
         if not egg.undeployEgg(message["type"]):
             return
-
-        # delete version on active master only
-        if self.clusterInfo.role == Roles.ACTIVE:
-            Version.deleteVersion(self.node, "", message["type"])
 
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
@@ -762,13 +753,10 @@ class SystemManagerImplementation(object):
         # Is node in configuration?
         configuration = Backend().configuration
         node = envelope.From
-        if node not in configuration.getNodeNames():
+        if node not in self.clusterInfo.nodeNames:
             self.log.debug("Adding %s", node)
             configuration.addNode(envelope.Message["node"])
             self.log.debug("%s added to the configuration",node)
-
-        # change directly to starting state since we are going to start the node
-        configuration.changeState(node, None, States.STARTING)
 
         # start node
         self.client.forwardMessage(StartNode(node))
@@ -915,32 +903,6 @@ class SystemManagerImplementation(object):
                     message["devices"][full_name] = deviceInfo
                 loadMessageWithRegisteredDevices(node_name, message, full_name + ".", deviceInfo)
 
-        # for each device type, save version information by name
-        # if no name currently exists, then name will be blank
-        def saveVersionByType(deviceType, version, configurationInfo):
-            def _saveVersionByType(parentPrefix, nodeOrDevice, deviceType, version):
-                for deviceInfo in nodeOrDevice.devices.itervalues():
-                    deviceName = parentPrefix + deviceInfo.name
-                    if deviceInfo.type == deviceType:
-                        Version.saveVersion(envelope.From, deviceName, deviceType, version)
-                    # check hierarchy children
-                    _saveVersionByType(deviceName + ".", deviceInfo, deviceType, version)
-
-            # handle sysmgr version
-            if deviceType == "c4.system.manager.SystemManager":
-                Version.saveVersion(envelope.From, "system-manager", deviceType, version)
-                return
-
-            # handle device managers version
-
-            # make sure there is at least one row in the version table
-            # in case there is no name (i.e. device not in configuration) for the given type
-            Version.saveVersion(envelope.From, "", deviceType, version)
-            # save version for each device manager name, if any, for this node
-            if envelope.From in configurationInfo.nodes:
-                nodeInfo = configurationInfo.nodes[envelope.From]
-                _saveVersionByType("", nodeInfo, deviceType, version)
-
         if self.clusterInfo.role == Roles.ACTIVE:
             self.log.debug("Received start node acknowlegdment from '%s'", envelope.From)
             if "state" in message and isinstance(message["state"], States):
@@ -950,10 +912,6 @@ class SystemManagerImplementation(object):
 
                 # version
                 configurationInfo = configuration.toInfo()
-                # set version for all of the device names for each device type, if any
-                # also sets version for sysmgr
-                for deviceType, version in message["version_dict"].iteritems():
-                    saveVersionByType(deviceType, version, configurationInfo)
 
                 # start all devices that are in REGISTERED state for the node that just started
                 startEnvelope = StartDeviceManagers(envelope.From)
@@ -1461,7 +1419,7 @@ def main():
 
         except Exception as e:
             log.error("Error in '%s'", args.config)
-            log.error(e)
+            log.exception(e)
             return 1
 
     try:

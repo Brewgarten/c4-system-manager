@@ -1,6 +1,7 @@
 """
 etcd based backend implementation
 """
+import os
 import re
 
 import etcd3
@@ -17,8 +18,9 @@ from c4.system.configuration import (Configuration,
 from c4.utils.decorators import retry
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
+from c4.utils.util import SharedDictWithLock
 
-
+@ClassLogger
 class EtcdBackend(BackendImplementation):
     """
     etcd backend implementation
@@ -173,7 +175,7 @@ class EtcdClient(etcd3.Etcd3Client):
 class EtcdClusterInfo(object):
     """
     etcd backend cluster information implementation
-
+    
     :param backend: backend implementation
     :type backend: :class:`~BackendImplementation`
     :param node: node
@@ -187,31 +189,50 @@ class EtcdClusterInfo(object):
         self.node = node
         self.address = address
 
+        configuration = self.backend.configuration
+        self._aliases = SharedDictWithLock()
+        for alias, node in configuration.getAliases().iteritems():
+            self._aliases[alias] = node
+        self._nodes = SharedDictWithLock()
+        for nodeName in configuration.getNodeNames():
+            nodeInfo = configuration.getNode(nodeName, includeDevices=False)
+            self._nodes[nodeInfo.name] = nodeInfo.address
+
     @property
     def aliases(self):
         """
         Alias mappings
         """
-        return self.backend.configuration.getAliases()
+        return self._aliases
 
     def getNodeAddress(self, node):
         """
         Get address for specified node
-
         :param node: node
         :type node: str
         :returns: str or ``None`` if not found
         """
-        if node == self.node:
-            return self.address
-        return self.backend.configuration.getAddress(node)
+        address = self._nodes.get(node)
+        if address is not None:
+            return address
+
+        nodeName = self._aliases.get(node)
+        if nodeName is None:
+            self.log.error("could not get address because node '%s' does not exist", node)
+            return None
+
+        address = self._nodes.get(nodeName)
+        if address is None:
+            self.log.error("could not get address because node for alias '%s' does not exist", nodeName)
+            return None
+        return address
 
     @property
     def nodeNames(self):
         """
         Names of the nodes in the cluster
         """
-        return self.backend.configuration.getNodeNames()
+        return self._nodes.keys()
 
     @property
     def role(self):
@@ -241,7 +262,7 @@ class EtcdClusterInfo(object):
         Active system manager address
         """
         configuration = self.backend.configuration
-        return configuration.getAddress(configuration.getSystemManagerNodeName())
+        return self.getNodeAddress(configuration.getSystemManagerNodeName())
 
     @property
     def systemManagerNodeName(self):
@@ -249,6 +270,7 @@ class EtcdClusterInfo(object):
         Active system manager node name
         """
         return self.backend.configuration.getSystemManagerNodeName()
+
 
 @ClassLogger
 class EtcdConfiguration(Configuration):
