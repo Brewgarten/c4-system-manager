@@ -1,7 +1,6 @@
 """
 etcd based backend implementation
 """
-import os
 import re
 
 import etcd3
@@ -16,9 +15,25 @@ from c4.system.configuration import (Configuration,
                                      Roles,
                                      States)
 from c4.utils.decorators import retry
-from c4.utils.jsonutil import JSONSerializable
+from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import SharedDictWithLock
+from c4.system.deviceManager import DeviceManagerStatus
+from c4.system.manager import SystemManagerStatus
+from c4.system.history import DeviceHistory, NodeHistory
+
+class Entry(object):
+    """
+    History entry with timestamp and status information
+
+    :param timestamp: datetime instance
+    :type timestamp: :class:`Datetime`
+    :param status: status
+    :type status: :class:`SystemManagerStatus` or :class:`DeviceManagerStatus`
+    """
+    def __init__(self, timestamp, status):
+        self.timestamp = timestamp
+        self.status = status
 
 @ClassLogger
 class EtcdBackend(BackendImplementation):
@@ -58,6 +73,14 @@ class EtcdBackend(BackendImplementation):
         etcd based key-value store instance
         """
         return EtcdKeyValueStore(self.client)
+
+    @property
+    def deviceHistory(self):
+        return EtcdDeviceHistory(self.client)
+
+    @property
+    def nodeHistory(self):
+        return EtcdNodeHistory(self.client)
 
     def ClusterInfo(self, node, address, systemManagerAddress, role, state):
         return EtcdClusterInfo(self, node, address)
@@ -175,7 +198,7 @@ class EtcdClient(etcd3.Etcd3Client):
 class EtcdClusterInfo(object):
     """
     etcd backend cluster information implementation
-    
+
     :param backend: backend implementation
     :type backend: :class:`~BackendImplementation`
     :param node: node
@@ -972,6 +995,157 @@ class EtcdConfiguration(Configuration):
         return value
 
 @ClassLogger
+class EtcdDeviceHistory(DeviceHistory):
+    """
+    Device manager history
+    """
+    def __init__(self, client):
+        self.client = client
+
+    def add(self, node, name, status):
+        """
+        Add status for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param status: status
+        :type status: :class:`DeviceManagerStatus`
+        """
+        if not isinstance(status, DeviceManagerStatus):
+            raise ValueError("'{0}' needs to be a '{1}'".format(status, DeviceManagerStatus))
+
+        statusKey = "/".join(["/history", node, name, status.timestamp.toISOFormattedString()])
+        latestStatusKey = "/".join(["/status", node, name])
+
+        serializedStatus = status.toJSON(includeClassInfo=True)
+        self.client.put(latestStatusKey, serializedStatus)
+        self.client.put(statusKey, serializedStatus)
+
+    def get(self, node, name, limit=None):
+        """
+        Get status history for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param limit: number of statuses to return
+        :type limit: int
+        :returns: list of history entries
+        :rtype: [:class:`DeviceManagerStatus`]
+        """
+        if limit == 1:
+            return [self.getLatest(node, name)]
+
+        historyPrefix = "/".join(["/history", node, name, ""])
+
+        entries = [
+            Entry(
+                Datetime.fromISOFormattedString(metadata.key.replace(historyPrefix, "")),
+                JSONSerializable.fromJSON(value))
+            for value, metadata in self.client.get_prefix(historyPrefix, limit=limit, sort_order="descend")
+        ]
+        return entries
+
+    def getAll(self):
+        """
+        Get status history for all device managers on all nodes
+
+        :returns: list of history entries
+        :rtype: [:class:`DeviceManagerStatus`]
+        """
+        pattern = re.compile("/history/[^/]+/[^/]+/(?P<timestamp>.+)")
+        return [
+            Entry(
+                Datetime.fromISOFormattedString(pattern.search(metadata.key).group("timestamp")),
+                JSONSerializable.fromJSON(value))
+            for value, metadata in self.client.get_prefix("/history/", sort_order="descend")
+        ]
+
+    def getLatest(self, node, name):
+        """
+        Get latest status for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: history entry
+        :rtype: :class:`DeviceManagerStatus`
+        """
+        latestStatusKey = "/".join(["/status", node, name])
+
+        value, _ = self.client.get(latestStatusKey)
+        if not value:
+            return None
+
+        status = JSONSerializable.fromJSON(value)
+        return Entry(status.timestamp, status)
+
+    def remove(self, node=None, name=None):
+        """
+        Remove status history for device managers with specified names on specified nodes.
+
+        node and name:
+            remove history for specific device on a specific node
+
+        node and no name
+            remove history for all devices on a specific node
+
+        no node and name
+            remove history for specific device on all nodes
+
+        no node and no name
+            remove history for all devices on all nodes
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        """
+        if node:
+            if name:
+                # remove history for specific device on a specific node
+                historyPrefix = "/".join(["/history", node, name, ""])
+                latestStatusKey = "/".join(["/status", node, name])
+                self.client.delete(latestStatusKey)
+                self.client.delete_prefix(historyPrefix)
+            else:
+                # remove history for all devices on a specific node
+                historyPrefix = "/".join(["/history", node, ""])
+                latestStatusKey = "/".join(["/status", node, ""])
+                self.client.delete_prefix(latestStatusKey)
+                self.client.delete_prefix(historyPrefix)
+
+        else:
+            if name:
+                # remove history for specific device on all nodes
+                pattern = re.compile("/status/(?P<node>.+)/{name}".format(name=name))
+                nodes = {
+                    pattern.search(metadata.key).group("node")
+                    for _, metadata in self.client.get_prefix("/status/")
+                    if pattern.search(metadata.key)
+                }
+                for node in nodes:
+                    self.remove(node, name)
+            else:
+                # remove history for all devices on all nodes
+                pattern = re.compile("/status/(?P<node>.+)/.+")
+                nodes = {
+                    pattern.search(metadata.key).group("node")
+                    for _, metadata in self.client.get_prefix("/status/")
+                    if pattern.search(metadata.key)
+                }
+                for node in nodes:
+                    latestStatusKey = "/".join(["/status", node, ""])
+                    self.client.delete_prefix(latestStatusKey)
+                self.client.delete_prefix("/history/")
+
+
+
+@ClassLogger
 class EtcdKeyValueStore(BackendKeyValueStore):
     """
     etcd backend key-value store implementation
@@ -1080,6 +1254,122 @@ class EtcdKeyValueStore(BackendKeyValueStore):
         :returns: transaction object
         """
         return EtcdTransaction(self.client)
+
+@ClassLogger
+class EtcdNodeHistory(NodeHistory):
+    """
+    System manager history
+    """
+    def __init__(self, client):
+        self.client = client
+
+    def add(self, node, status):
+        """
+        Add status for system manager with on specified node
+
+        :param node: node name
+        :type node: str
+        :param status: status
+        :type status: :class:`SystemManagerStatus`
+        """
+        if not isinstance(status, SystemManagerStatus):
+            raise ValueError("'{0}' needs to be a '{1}'".format(status, SystemManagerStatus))
+
+        statusKey = "/".join(["/nodeHistory", node, status.timestamp.toISOFormattedString()])
+        latestStatusKey = "/".join(["/status", node])
+
+        serializedStatus = status.toJSON(includeClassInfo=True)
+        self.client.put(latestStatusKey, serializedStatus)
+        self.client.put(statusKey, serializedStatus)
+
+    def get(self, node, limit=None):
+        """
+        Get status history for system manager on specified node
+
+        :param node: node name
+        :type node: str
+        :param limit: number of statuses to return
+        :type limit: int
+        :returns: list of history entries
+        :rtype: [:class:`SystemManagerStatus`]
+        """
+        if limit == 1:
+            return [self.getLatest(node)]
+
+        historyPrefix = "/".join(["/nodeHistory", node, ""])
+
+        entries = [
+            Entry(
+                Datetime.fromISOFormattedString(metadata.key.replace(historyPrefix, "")),
+                JSONSerializable.fromJSON(value))
+            for value, metadata in self.client.get_prefix(historyPrefix, limit=limit, sort_order="descend")
+        ]
+        return entries
+
+    def getAll(self):
+        """
+        Get status history for all system managers on all nodes
+
+        :returns: list of history entries
+        :rtype: [:class:`SystemManagerStatus`]
+        """
+        pattern = re.compile("/nodeHistory/[^/]+/(?P<timestamp>.+)")
+        return [
+            Entry(
+                Datetime.fromISOFormattedString(pattern.search(metadata.key).group("timestamp")),
+                JSONSerializable.fromJSON(value))
+            for value, metadata in self.client.get_prefix("/nodeHistory/", sort_order="descend")
+        ]
+
+    def getLatest(self, node):
+        """
+        Get latest status for system manager on specified node
+
+        :param node: node name
+        :type node: str
+        :returns: history entry
+        :rtype: :class:`SystemManagerStatus`
+        """
+        latestStatusKey = "/".join(["/status", node])
+
+        value, _ = self.client.get(latestStatusKey)
+        if not value:
+            return None
+
+        status = JSONSerializable.fromJSON(value)
+        return Entry(status.timestamp, status)
+
+    def remove(self, node=None):
+        """
+        Remove status history for system managers on specified nodes.
+
+        node:
+            remove history for specific node
+
+        no node
+            remove history for all nodes
+
+        :param node: node name
+        :type node: str
+        """
+        if node:
+            # remove history for specific node
+            historyPrefix = "/".join(["/nodeHistory", node, ""])
+            latestStatusKey = "/".join(["/status", node])
+            self.client.delete(latestStatusKey)
+            self.client.delete_prefix(historyPrefix)
+        else:
+            # remove history for all nodes
+            pattern = re.compile("/status/(?P<node>[^/]+)")
+            nodes = {
+                pattern.search(metadata.key).group("node")
+                for _, metadata in self.client.get_prefix("/status/")
+                if pattern.search(metadata.key)
+            }
+            for node in nodes:
+                latestStatusKey = "/".join(["/status", node])
+                self.client.delete(latestStatusKey)
+            self.client.delete_prefix("/nodeHistory/")
 
 class EtcdValue(JSONSerializable):
     """

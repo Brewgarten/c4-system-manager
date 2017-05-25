@@ -94,6 +94,18 @@ class BackendImplementation(object):
             log.error("could not load backend from configuration file '%s' because '%s'", fileName, e)
         return None
 
+    @abstractproperty
+    def deviceHistory(self):
+        """
+        Reference to the DeviceHistory implementation
+        """
+
+    @abstractproperty
+    def nodeHistory(self):
+        """
+        Reference to the NodeHistory implementation
+        """
+
 class BackendInfo(JSONSerializable):
     """
     Backend information base class

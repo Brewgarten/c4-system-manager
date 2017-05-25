@@ -37,7 +37,6 @@ It can then be instantiated using
 """
 
 import ctypes
-import datetime
 import inspect
 import logging
 import multiprocessing
@@ -49,7 +48,7 @@ from c4.messaging import (DealerRouter,
                           callMessageHandler)
 from c4.system.configuration import States
 from c4.system.messages import LocalStopDeviceManager
-from c4.utils.jsonutil import JSONSerializable
+from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import callWithVariableArguments, getVariableArguments
 
@@ -365,5 +364,4 @@ class DeviceManagerStatus(JSONSerializable):
     """
     def __init__(self):
         super(DeviceManagerStatus, self).__init__()
-        utcTime = datetime.datetime.utcnow()
-        self.timestamp = "{:%Y-%m-%d %H:%M:%S}.{:03d}".format(utcTime, utcTime.microsecond // 1000)
+        self.timestamp =  Datetime.utcnow()

@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import argparse
-import datetime
 import imp
 import logging
 import multiprocessing
@@ -29,7 +28,7 @@ from c4.system.messages import (DisableNode,
                                 LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
                                 RegistrationNotification,
                                 StartDeviceManagers, StartNode, StopNode)
-from c4.utils.jsonutil import JSONSerializable
+from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import getFullModuleName, getModuleClasses
 import platform as platformSpec
@@ -958,48 +957,10 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         if self.clusterInfo.role == Roles.ACTIVE:
-
             (node, name) = self.parseFrom(envelope.From)
-            try:
-                statusJSON = message.toJSON(True)
-                # TODO: we should think if showing the status message is necessary as it produces a lot of output
-                # self.log.debug("Status from %s:\n%s", envelope.From, message.toJSON(pretty=True))
-                self.log.debug("Received status from %s", envelope.From)
-
-                if name:
-                    configuration = Backend().configuration
-                    senderType = configuration.getDevice(node, name).type
-                else:
-                    name = None
-                    senderType = getFullModuleName(SystemManager) + ".SystemManager"
-
-                # TODO: this kind of database functionality should be in a separate History class
-                # FIXME: this only works with the shared SQLite backend right now
-                backend = Backend()
-                dbm = backend.database
-                dbm.write("begin")
-                # t_sm_history grows
-                # (until a limit is reached and a db trigger removes old rows)
-                dbm.write("""
-                    insert into t_sm_history (history_date, node, name, type, details)
-                    values (?, ?, ?, ?, ?)""",
-                    (message.timestamp, node, name, senderType, statusJSON))
-                # t_sm_latest holds the latest status
-                # the table never grows more than the total number of components
-                # perform a provisional update and check if rows were affected
-                updated = dbm.write("""
-                    update t_sm_latest set details = ?
-                    where node is ? and name is ?""",
-                    (statusJSON, node, name))
-                if updated < 1:
-                    dbm.write("""
-                        insert into t_sm_latest (node, name, type, details)
-                        values (?, ?, ?, ?)""",
-                        (node, name, senderType, statusJSON))
-                dbm.write("commit")
-                dbm.close()
-            except Exception as e:
-                self.log.error("%s needs to be a status message. Error:%s", message, e)
+            self.log.debug("Received status from %s", envelope.From)
+            history = Backend().deviceHistory
+            history.add(node, name, message)
 
         else:
             self.log.error("Received status response from '%s' but current role is '%s'",
@@ -1295,8 +1256,7 @@ class SystemManagerStatus(JSONSerializable):
     """
     def __init__(self):
         super(SystemManagerStatus, self).__init__()
-        utcTime = datetime.datetime.utcnow()
-        self.timestamp = "{:%Y-%m-%d %H:%M:%S}.{:03d}".format(utcTime, utcTime.microsecond // 1000)
+        self.timestamp = Datetime.utcnow()
 
 def main():
     """

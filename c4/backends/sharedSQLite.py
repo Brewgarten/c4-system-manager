@@ -271,6 +271,7 @@ class DBManager(object):
         except sqlite3.Error, message:
             self.log.error("Could not execute sql update/insert: %s %s, %s", statement, parameters, message)
 
+@ClassLogger
 class SharedSqliteDBBackend(BackendImplementation):
     """
     Shared SQLite database backend implementation
@@ -289,6 +290,16 @@ class SharedSqliteDBBackend(BackendImplementation):
 
     def ClusterInfo(self, node, address, systemManagerAddress, role, state):
         return SharedClusterInfo(self, node, address, systemManagerAddress, role, state)
+
+    @property
+    def deviceHistory(self):
+        self.log.error("deviceHistory is not supported by SharedSQLiteBackend")
+        return None
+
+    @property
+    def nodeHistory(self):
+        self.log.error("nodeHistory is not supported by SharedSQLiteBackend")
+        return None
 
 @ClassLogger
 class SharedSqliteDBConfiguration(Configuration):
