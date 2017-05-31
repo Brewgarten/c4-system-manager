@@ -37,8 +37,7 @@ from c4.system.backend import Backend, BackendInfo
 
 log = logging.getLogger(__name__)
 
-#TODO: make this configurable
-DEFAULT_CONFIGURATION_PATH = "/etc/dashdb-platform"
+DEFAULT_CONFIGURATION_PATH = "/etc/c4"
 
 NOT_RUNNING_ACTIONS = set([
     "RegistrationNotification",
@@ -1274,17 +1273,28 @@ def main():
     parser = argparse.ArgumentParser(description="C4 system manager")
 
     parentParser = argparse.ArgumentParser(add_help=False)
+    parentParser.add_argument("-b", "--backend", action="store", default=os.path.join(DEFAULT_CONFIGURATION_PATH, "backend.json"), help="Backend configuration file")
     parentParser.add_argument("-n", "--node", action="store", default=currentNodeName, help="Node name for this system manager")
     parentParser.add_argument("-p", "--port", action="store", dest="node_port", type=int, default=5000, help="Port for this system manager")
     parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
 
     commandParser = parser.add_subparsers(dest="command")
 
-    runParser = commandParser.add_parser("run", help="Start this system manager as an active node and continue to run in the foreground", parents=[parentParser])
+    runParser = commandParser.add_parser(
+        "run",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Start this system manager as an active node and continue to run in the foreground",
+        parents=[parentParser]
+    )
     runParser.add_argument("-c", "--config", action="store", help="Configuration file name")
     runParser.add_argument("-f", "--force", action="store_true", help="Loads from the configuration file, regardless of whether the configuration tables are empty or not.")
 
-    joinParser = commandParser.add_parser("join", help="Join an existing cluster of system managers by starting this system manager as a thin node that connects to the active system manager", parents=[parentParser])
+    joinParser = commandParser.add_parser(
+        "join",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Join an existing cluster of system managers by starting this system manager as a thin node that connects to the active system manager",
+        parents=[parentParser]
+    )
     joinParser.add_argument("address", action="store", help="Address of the active system manager")
 
     args = parser.parse_args()
@@ -1304,7 +1314,6 @@ def main():
         logging.getLogger("c4.system.db").setLevel(logging.DEBUG)
 
     # check for backend
-    backendConfigFile = os.path.join(DEFAULT_CONFIGURATION_PATH, "backend.json")
     exampleProperties = {
         "path.database": "/dev/shm",
         "path.backup": "/tmp"
@@ -1313,11 +1322,11 @@ def main():
                               properties=exampleProperties)
     example = exampleInfo.toJSON(includeClassInfo=True, pretty=True)
 
-    if not os.path.exists(backendConfigFile):
-        log.error("could not find backend configuration file at '%s', e.g.:\n%s", backendConfigFile, example)
+    if not os.path.exists(args.backend):
+        log.error("could not find backend configuration file at '%s', e.g.:\n%s", args.backend, example)
         return 1
     try:
-        backendInfo = BackendInfo.fromJSONFile(backendConfigFile)
+        backendInfo = BackendInfo.fromJSONFile(args.backend)
 
         # get class info
         info = backendInfo.backend.split(".")
@@ -1334,7 +1343,8 @@ def main():
         backend = Backend(implementation=backendImplementation)
 
     except Exception as e:
-        log.error("could not load backend configuration file from '%s' because '%s', e.g.:\n%s", backendConfigFile, e, example)
+        log.error("could not load backend configuration file from '%s' because '%s', e.g.:\n%s", args.backend, e, example)
+        log.exception(e)
         return 1
 
     if args.command == "join":
