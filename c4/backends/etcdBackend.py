@@ -19,21 +19,10 @@ from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import SharedDictWithLock
 from c4.system.deviceManager import DeviceManagerStatus
+from c4.system.history import (DeviceHistory,
+                               Entry,
+                               NodeHistory)
 from c4.system.manager import SystemManagerStatus
-from c4.system.history import DeviceHistory, NodeHistory
-
-class Entry(object):
-    """
-    History entry with timestamp and status information
-
-    :param timestamp: datetime instance
-    :type timestamp: :class:`Datetime`
-    :param status: status
-    :type status: :class:`SystemManagerStatus` or :class:`DeviceManagerStatus`
-    """
-    def __init__(self, timestamp, status):
-        self.timestamp = timestamp
-        self.status = status
 
 @ClassLogger
 class EtcdBackend(BackendImplementation):
@@ -1034,7 +1023,7 @@ class EtcdDeviceHistory(DeviceHistory):
         :param limit: number of statuses to return
         :type limit: int
         :returns: list of history entries
-        :rtype: [:class:`DeviceManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
         if limit == 1:
             return [self.getLatest(node, name)]
@@ -1054,7 +1043,7 @@ class EtcdDeviceHistory(DeviceHistory):
         Get status history for all device managers on all nodes
 
         :returns: list of history entries
-        :rtype: [:class:`DeviceManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
         pattern = re.compile("/history/[^/]+/[^/]+/(?P<timestamp>.+)")
         return [
@@ -1073,7 +1062,7 @@ class EtcdDeviceHistory(DeviceHistory):
         :param name: device manager name
         :type name: str
         :returns: history entry
-        :rtype: :class:`DeviceManagerStatus`
+        :rtype: :class:`Entry`
         """
         latestStatusKey = "/".join(["/status", node, name])
 
@@ -1291,7 +1280,7 @@ class EtcdNodeHistory(NodeHistory):
         :param limit: number of statuses to return
         :type limit: int
         :returns: list of history entries
-        :rtype: [:class:`SystemManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
         if limit == 1:
             return [self.getLatest(node)]
@@ -1311,7 +1300,7 @@ class EtcdNodeHistory(NodeHistory):
         Get status history for all system managers on all nodes
 
         :returns: list of history entries
-        :rtype: [:class:`SystemManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
         pattern = re.compile("/nodeHistory/[^/]+/(?P<timestamp>.+)")
         return [
@@ -1328,7 +1317,7 @@ class EtcdNodeHistory(NodeHistory):
         :param node: node name
         :type node: str
         :returns: history entry
-        :rtype: :class:`SystemManagerStatus`
+        :rtype: :class:`Entry`
         """
         latestStatusKey = "/".join(["/status", node])
 

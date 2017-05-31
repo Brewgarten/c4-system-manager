@@ -1,10 +1,10 @@
 from abc import ABCMeta, abstractmethod
 
+
 class DeviceHistory(object):
     """
     Device manager history
     """
-
     __metaclass__ = ABCMeta
 
     @abstractmethod
@@ -32,7 +32,7 @@ class DeviceHistory(object):
         :param limit: number of statuses to return
         :type limit: int
         :returns: list of history entries
-        :rtype: [:class:`DeviceManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
 
     @abstractmethod
@@ -41,7 +41,7 @@ class DeviceHistory(object):
         Get status history for all device managers on all nodes
 
         :returns: list of history entries
-        :rtype: [:class:`DeviceManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
 
     @abstractmethod
@@ -54,7 +54,7 @@ class DeviceHistory(object):
         :param name: device manager name
         :type name: str
         :returns: history entry
-        :rtype: :class:`DeviceManagerStatus`
+        :rtype: :class:`Entry`
         """
 
     @abstractmethod
@@ -80,11 +80,23 @@ class DeviceHistory(object):
         :type name: str
         """
 
+class Entry(object):
+    """
+    History entry with timestamp and status information
+
+    :param timestamp: datetime instance
+    :type timestamp: :class:`Datetime`
+    :param status: status
+    :type status: :class:`SystemManagerStatus` or :class:`DeviceManagerStatus`
+    """
+    def __init__(self, timestamp, status):
+        self.timestamp = timestamp
+        self.status = status
+
 class NodeHistory(object):
     """
     System manager history
     """
-
     __metaclass__ = ABCMeta
 
     @abstractmethod
@@ -108,7 +120,7 @@ class NodeHistory(object):
         :param limit: number of statuses to return
         :type limit: int
         :returns: list of history entries
-        :rtype: [:class:`SystemManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
 
     @abstractmethod
@@ -117,7 +129,7 @@ class NodeHistory(object):
         Get status history for all system managers on all nodes
 
         :returns: list of history entries
-        :rtype: [:class:`SystemManagerStatus`]
+        :rtype: [:class:`Entry`]
         """
 
     @abstractmethod
@@ -128,7 +140,7 @@ class NodeHistory(object):
         :param node: node name
         :type node: str
         :returns: history entry
-        :rtype: :class:`SystemManagerStatus`
+        :rtype: :class:`Entry`
         """
 
     @abstractmethod

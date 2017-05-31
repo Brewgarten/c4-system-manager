@@ -8,24 +8,6 @@ from c4.utils.logutil import ClassLogger
 
 log = logging.getLogger(__name__)
 
-@ClassLogger
-class Backend(object):
-    """
-    Singleton backend reference that abstracts different backend implementations
-    """
-    __implementation = None
-
-    def __new__(cls, implementation=None):
-        if implementation:
-            if isinstance(implementation, BackendImplementation):
-                Backend.__implementation = implementation
-                Backend.log.debug("setting backend implementation to '%s'", Backend.__implementation.__class__.__name__)
-            else:
-                Backend.log.error("'%s' is not of type '%s'", implementation, BackendImplementation)
-        if Backend.__implementation is None:
-            raise ValueError("need to initialize backend first")
-        return Backend.__implementation
-
 class BackendImplementation(object):
     """
     Backend implementation base class
@@ -37,29 +19,6 @@ class BackendImplementation(object):
 
     def __init__(self, info):
         self.info = info
-
-    @abstractproperty
-    def configuration(self):
-        """
-        Reference to the configuration implementation
-        """
-
-    @abstractmethod
-    def ClusterInfo(self, node, address, systemManagerAddress, role, state):
-        """
-        A basic cluster information object
-
-        :param node: node
-        :type node: str
-        :param address: address of the node
-        :type address: str
-        :param systemManagerAddress: address of the active system manager
-        :type systemManagerAddress: str
-        :param role: role of the node
-        :type role: :class:`~Roles`
-        :param state: state of the node
-        :type state: :class:`~States`
-        """
 
     @staticmethod
     def fromConfigFile(fileName):
@@ -94,6 +53,29 @@ class BackendImplementation(object):
             log.error("could not load backend from configuration file '%s' because '%s'", fileName, e)
         return None
 
+    @abstractmethod
+    def ClusterInfo(self, node, address, systemManagerAddress, role, state):
+        """
+        A basic cluster information object
+
+        :param node: node
+        :type node: str
+        :param address: address of the node
+        :type address: str
+        :param systemManagerAddress: address of the active system manager
+        :type systemManagerAddress: str
+        :param role: role of the node
+        :type role: :class:`~Roles`
+        :param state: state of the node
+        :type state: :class:`~States`
+        """
+
+    @abstractproperty
+    def configuration(self):
+        """
+        Reference to the configuration implementation
+        """
+
     @abstractproperty
     def deviceHistory(self):
         """
@@ -101,10 +83,79 @@ class BackendImplementation(object):
         """
 
     @abstractproperty
+    def keyValueStore(self):
+        """
+        Reference to the key-value store implementation
+        """
+
+    @abstractproperty
     def nodeHistory(self):
         """
         Reference to the NodeHistory implementation
         """
+
+@ClassLogger
+class Backend(BackendImplementation):
+    """
+    Singleton backend reference that abstracts different backend implementations
+    """
+    __implementation = None
+
+    def __new__(cls, implementation=None):
+        if implementation:
+            if isinstance(implementation, BackendImplementation):
+                Backend.__implementation = implementation
+                Backend.log.debug("setting backend implementation to '%s'", Backend.__implementation.__class__.__name__)
+            else:
+                Backend.log.error("'%s' is not of type '%s'", implementation, BackendImplementation)
+        if Backend.__implementation is None:
+            raise ValueError("need to initialize backend first")
+        return Backend.__implementation
+
+    def ClusterInfo(self, node, address, systemManagerAddress, role, state):
+        """
+        A basic cluster information object
+
+        :param node: node
+        :type node: str
+        :param address: address of the node
+        :type address: str
+        :param systemManagerAddress: address of the active system manager
+        :type systemManagerAddress: str
+        :param role: role of the node
+        :type role: :class:`~Roles`
+        :param state: state of the node
+        :type state: :class:`~States`
+        """
+        return Backend.__implementation.ClusterInfo(node, address, systemManagerAddress, role, state)
+
+    @property
+    def configuration(self):
+        """
+        Reference to the configuration implementation
+        """
+        return Backend.__implementation.configuration
+
+    @property
+    def deviceHistory(self):
+        """
+        Reference to the DeviceHistory implementation
+        """
+        return Backend.__implementation.deviceHistory
+
+    @property
+    def keyValueStore(self):
+        """
+        Reference to the key-value store implementation
+        """
+        return Backend.__implementation.keyValueStore
+
+    @property
+    def nodeHistory(self):
+        """
+        Reference to the NodeHistory implementation
+        """
+        return Backend.__implementation.nodeHistory
 
 class BackendInfo(JSONSerializable):
     """

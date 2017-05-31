@@ -1,9 +1,10 @@
 import pytest
 
-from c4.utils.jsonutil import Datetime
+from c4.system.backend import Backend
 from c4.system.deviceManager import DeviceManagerStatus
 from c4.system.manager import SystemManagerStatus
-from c4.backends.etcdBackend import EtcdBackend
+from c4.utils.jsonutil import Datetime
+
 
 class MockDeviceManagerStatus(DeviceManagerStatus):
     def __init__(self, value, timestampString):
@@ -20,8 +21,6 @@ class MockSystemManagerStatus(SystemManagerStatus):
 @pytest.fixture
 def deviceHistory(backend):
     history = backend.deviceHistory
-    if history is None:
-        return None
     history.add("node1", "device1", MockDeviceManagerStatus("one", Datetime(2000, 1, 1)))
     history.add("node1", "device1", MockDeviceManagerStatus("two", Datetime(2000, 1, 2)))
     history.add("node1", "device1", MockDeviceManagerStatus("three", Datetime(2000, 1, 3)))
@@ -34,8 +33,6 @@ def deviceHistory(backend):
 @pytest.fixture
 def nodeHistory(backend):
     history = backend.nodeHistory
-    if history is None:
-        return None
     history.add("node1", MockSystemManagerStatus("one", Datetime(2000, 1, 1)))
     history.add("node1", MockSystemManagerStatus("two", Datetime(2000, 1, 2)))
     history.add("node1", MockSystemManagerStatus("three", Datetime(2000, 1, 3)))
@@ -43,12 +40,11 @@ def nodeHistory(backend):
     history.add("node3", MockSystemManagerStatus("five", Datetime(2000, 1, 5)))
     return history
 
-class TestDeviceHistory:
-    def test_get(self, backend, deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+class TestDeviceHistory():
 
-        history = backend.deviceHistory
+    def test_get(self, deviceHistory):
+
+        history = Backend().deviceHistory
 
         # make sure all device entries are there and in order of recency
         entries = history.get("node1", "device1")
@@ -64,11 +60,9 @@ class TestDeviceHistory:
         entries = history.getAll()
         assert [entry.status.test for entry in entries] == ["seven", "six", "five", "four", "three", "two", "one"]
 
-    def test_getLatest(self, backend, deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_getLatest(self, deviceHistory):
 
-        history = backend.deviceHistory
+        history = Backend().deviceHistory
 
         # make sure all entries are there
         assert history.getLatest("node1", "device1")
@@ -78,20 +72,16 @@ class TestDeviceHistory:
         # make sure the entry is the latest
         assert history.getLatest("node1", "device1").status.test == "three"
 
-    def test_removeAllDevicesOnAllNodes(self, backend,deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeAllDevicesOnAllNodes(self, deviceHistory):
 
-        history = backend.deviceHistory
+        history = Backend().deviceHistory
         # check removing all history
         history.remove()
         assert not history.getAll()
 
-    def test_removeAllDevicesOnNode(self, backend, deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeAllDevicesOnNode(self, deviceHistory):
 
-        history = backend.deviceHistory
+        history = Backend().deviceHistory
 
         # check removing only history for node1
         history.remove(node="node1")
@@ -101,11 +91,9 @@ class TestDeviceHistory:
         assert history.get("node2", "device1")
         assert history.get("node3", "device1")
 
-    def test_removeDeviceOnAllNodes(self, backend, deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeDeviceOnAllNodes(self, deviceHistory):
 
-        history = backend.deviceHistory
+        history = Backend().deviceHistory
 
         # check removing only history for device1 on all nodes
         history.remove(name="device1")
@@ -115,11 +103,9 @@ class TestDeviceHistory:
         assert not history.get("node2", "device1")
         assert not history.get("node3", "device1")
 
-    def test_removeDeviceOnNode(self, backend, deviceHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeDeviceOnNode(self, deviceHistory):
 
-        history = backend.deviceHistory
+        history = Backend().deviceHistory
 
         # check removing only history for device1 on node1
         history.remove(node="node1", name="device1")
@@ -129,13 +115,11 @@ class TestDeviceHistory:
         assert history.get("node2", "device1")
         assert history.get("node3", "device1")
 
-class TestNodeHistory:
+class TestNodeHistory():
 
-    def test_get(self, backend, nodeHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_get(self, nodeHistory):
 
-        history = backend.nodeHistory
+        history = Backend().nodeHistory
 
         # make sure all node entries are there and in order of recency
         entries = history.get("node1")
@@ -151,11 +135,9 @@ class TestNodeHistory:
         entries = history.getAll()
         assert [entry.status.test for entry in entries] == ["five", "four", "three", "two", "one"]
 
-    def test_getLatest(self, backend, nodeHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_getLatest(self, nodeHistory):
 
-        history = backend.nodeHistory
+        history = Backend().nodeHistory
 
         # make sure all entries are there
         assert history.getLatest("node1")
@@ -165,21 +147,17 @@ class TestNodeHistory:
         # make sure the entry is the latest
         assert history.getLatest("node1").status.test == "three"
 
-    def test_removeAllNodes(self, backend, nodeHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeAllNodes(self, nodeHistory):
 
-        history = backend.nodeHistory
+        history = Backend().nodeHistory
 
         # check removing all history
         history.remove()
         assert not history.getAll()
 
-    def test_removeNode(self, backend, nodeHistory):
-        if not isinstance(backend, EtcdBackend):
-            return
+    def test_removeNode(self, nodeHistory):
 
-        history = backend.nodeHistory
+        history = Backend().nodeHistory
 
         # check removing only history for node1
         history.remove(node="node1")

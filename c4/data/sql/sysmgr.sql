@@ -1,3 +1,28 @@
+create table key_value_store
+(
+key		text primary key,
+value	text
+);
+
+create table history
+(
+node		text,
+name		text,
+timestamp	timestamp,
+status		text,
+
+primary key (node, name, timestamp)
+);
+
+create table status
+(
+node		text,
+name		text,
+status		text,
+
+primary key (node, name)
+);
+
 create table t_sm_latest
 (
 node                varchar(50),

@@ -276,8 +276,6 @@ def test_devices(backend, nodes):
     node2Info = configuration.getNode(nodes["node2"].name)
     assert node2Info.devices["cpu"]
     assert node2Info.devices["disk"]
-    log.fatal(node2Info.devices["disk"])
-    log.fatal(node2Info.devices["disk"].properties)
     assert node2Info.devices["disk"].properties["disks"] == "*"
     assert node2Info.devices["memory"]
 

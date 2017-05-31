@@ -5,11 +5,7 @@ import logging
 import os
 import sqlite3
 
-from c4.utils.logutil import ClassLogger
-from c4.utils.util import getPackageData
-from c4.utils.version import BasicVersion
-
-from c4.system.backend import BackendImplementation
+from c4.system.backend import BackendImplementation, BackendKeyValueStore
 from c4.system.configuration import (Configuration,
                                      DeviceInfo,
                                      NodeInfo,
@@ -17,6 +13,15 @@ from c4.system.configuration import (Configuration,
                                      Roles,
                                      SharedClusterInfo,
                                      States)
+from c4.system.deviceManager import DeviceManagerStatus
+from c4.system.history import (DeviceHistory,
+                               Entry,
+                               NodeHistory)
+from c4.system.manager import SystemManagerStatus
+from c4.utils.jsonutil import JSONSerializable
+from c4.utils.logutil import ClassLogger
+from c4.utils.util import getPackageData
+from c4.utils.version import BasicVersion
 
 
 # Lowest version of SQLite with Common Table Expression support
@@ -293,13 +298,24 @@ class SharedSqliteDBBackend(BackendImplementation):
 
     @property
     def deviceHistory(self):
-        self.log.error("deviceHistory is not supported by SharedSQLiteBackend")
-        return None
+        """
+        Shared SQLite database backend device manager history implementation
+        """
+        return SharedSqliteDBDeviceHistory(self.database)
+
+    @property
+    def keyValueStore(self):
+        """
+        Shared SQLite database based key-value store instance
+        """
+        return SharedSqliteDBKeyValueStore(self.database)
 
     @property
     def nodeHistory(self):
-        self.log.error("nodeHistory is not supported by SharedSQLiteBackend")
-        return None
+        """
+        Shared SQLite database backend node history implementation
+        """
+        return SharedSqliteDBNodeHistory(self.database)
 
 @ClassLogger
 class SharedSqliteDBConfiguration(Configuration):
@@ -932,3 +948,482 @@ class SharedSqliteDBConfiguration(Configuration):
         if rows:
             return rows[0]["node_name"]
         return None
+
+@ClassLogger
+class SharedSqliteDBDeviceHistory(DeviceHistory):
+    """
+    Shared SQLite database backend device manager history implementation
+
+    :param database: database manager
+    :type database: :class:`~DBManager`
+    """
+    def __init__(self, database):
+        self.database = database
+
+    def add(self, node, name, status):
+        """
+        Add status for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param status: status
+        :type status: :class:`DeviceManagerStatus`
+        """
+        if not isinstance(status, DeviceManagerStatus):
+            raise ValueError("'{0}' needs to be a '{1}'".format(status, DeviceManagerStatus))
+
+        timestamp = status.timestamp.toISOFormattedString()
+        serializedStatus = status.toJSON(includeClassInfo=True)
+
+        self.database.write("begin")
+        self.database.write("""
+            insert into history (node, name, timestamp, status) values (?, ?, ?, ?)""",
+            (node, name, timestamp, serializedStatus))
+        self.database.write("""
+            insert or replace into status (node, name, status) values (?, ?, ?)""",
+            (node, name, serializedStatus))
+        self.database.write("commit")
+
+    def get(self, node, name, limit=None):
+        """
+        Get status history for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :param limit: number of statuses to return
+        :type limit: int
+        :returns: list of history entries
+        :rtype: [:class:`Entry`]
+        """
+        rows = self.database.query("""
+            select status from history
+            where node=? and name=?
+            order by timestamp desc
+            limit ?""",
+            (node, name, limit or -1))
+        entries = []
+        for row in rows:
+            status = JSONSerializable.fromJSON(row["status"])
+            entries.append(Entry(status.timestamp, status))
+        return entries
+
+    def getAll(self):
+        """
+        Get status history for all device managers on all nodes
+
+        :returns: list of history entries
+        :rtype: [:class:`Entry`]
+        """
+        rows = self.database.query("""
+            select status from history
+            where name is not null
+            order by timestamp desc""")
+        entries = []
+        for row in rows:
+            status = JSONSerializable.fromJSON(row["status"])
+            entries.append(Entry(status.timestamp, status))
+        return entries
+
+    def getLatest(self, node, name):
+        """
+        Get latest status for device manager with specified name on specified node
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        :returns: history entry
+        :rtype: :class:`Entry`
+        """
+        rows = self.database.query(
+            """
+            select status from status
+            where node=? and name=?""",
+            (node, name))
+        if rows:
+            status = JSONSerializable.fromJSON(rows[0]["status"])
+            return Entry(status.timestamp, status)
+        return None
+
+    def remove(self, node=None, name=None):
+        """
+        Remove status history for device managers with specified names on specified nodes.
+
+        node and name:
+            remove history for specific device on a specific node
+
+        node and no name
+            remove history for all devices on a specific node
+
+        no node and name
+            remove history for specific device on all nodes
+
+        no node and no name
+            remove history for all devices on all nodes
+
+        :param node: node name
+        :type node: str
+        :param name: device manager name
+        :type name: str
+        """
+        self.database.write("begin")
+        if node:
+            if name:
+                # remove history for specific device on a specific node
+                self.database.write("""
+                    delete from status
+                    where node=? and name=?""",
+                    (node, name))
+                self.database.write("""
+                    delete from history
+                    where node=? and name=?""",
+                    (node, name))
+            else:
+                # remove history for all devices on a specific node
+                self.database.write("""
+                    delete from status
+                    where node=? and name is not null""",
+                    (node,))
+                self.database.write("""
+                    delete from history
+                    where node=? and name is not null""",
+                    (node,))
+        else:
+            if name:
+                # remove history for specific device on all nodes
+                self.database.write("""
+                    delete from status
+                    where name=?""",
+                    (name,))
+                self.database.write("""
+                    delete from history
+                    where name=?""",
+                    (name,))
+            else:
+                # remove history for all devices on all nodes
+                self.database.write("""
+                    delete from status
+                    where name is not null""")
+                self.database.write("""
+                    delete from history
+                    where name is not null""")
+        self.database.write("commit")
+
+@ClassLogger
+class SharedSqliteDBKeyValueStore(BackendKeyValueStore):
+    """
+    Shared SQLite database backend key-value store implementation
+
+    :param database: database manager
+    :type database: :class:`~DBManager`
+    """
+    def __init__(self, database):
+        self.database = database
+
+    def delete(self, key):
+        """
+        Delete value at specified key
+
+        :param key: key
+        :type key: str
+        """
+        try:
+            self.database.writeCommit("""
+                delete from key_value_store
+                where key=?""",
+                (key,))
+        except Exception as exception:
+            self.log.error(exception)
+
+    def deletePrefix(self, keyPrefix):
+        """
+        Delete all values with the specified key prefix
+
+        :param keyPrefix: key prefix
+        :type keyPrefix: str
+        """
+        try:
+            # note that we cannot use the parameterized version with like
+            self.database.writeCommit("""
+                delete from key_value_store
+                where key like '{keyPrefix}%'""".format(
+                    keyPrefix=keyPrefix))
+        except Exception as exception:
+            self.log.error(exception)
+
+    def get(self, key, default=None):
+        """
+        Get value at specified key
+
+        :param key: key
+        :type key: str
+        :param default: default value to return if key not found
+        :returns: value or default value
+        :rtype: str
+        """
+        try:
+            rows = self.database.query("""
+                select value from key_value_store
+                where key=?""",
+                (key,))
+            if rows:
+                return rows[0]["value"]
+        except Exception as exception:
+            self.log.error(exception)
+        return default
+
+    def getAll(self):
+        """
+        Get all key-value pairs
+
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+        try:
+            rows = self.database.query("select key, value from key_value_store")
+            return [
+                (row["key"], row["value"])
+                for row in rows
+            ]
+        except Exception as exception:
+            self.log.error(exception)
+        return []
+
+    def getPrefix(self, keyPrefix):
+        """
+        Get all key-value pairs with the specified key prefix
+
+        :param keyPrefix: key prefix
+        :type keyPrefix: str
+        :returns: key-value pairs
+        :rtype: [(key, value), ...]
+        """
+        try:
+            rows = self.database.query("""
+                select key, value from key_value_store
+                where key like '{keyPrefix}%'""".format(
+                    keyPrefix=keyPrefix))
+            return [
+                (row["key"], row["value"])
+                for row in rows
+            ]
+        except Exception as exception:
+            self.log.error(exception)
+        return []
+
+    def put(self, key, value):
+        """
+        Put value at specified key
+
+        :param key: key
+        :type key: str
+        :param value: value
+        :type value: str
+        """
+        try:
+            self.database.writeCommit("""
+                insert or replace into key_value_store (key, value) values (?, ?)""",
+                (key, value))
+        except Exception as exception:
+            self.log.error(exception)
+
+    @property
+    def transaction(self):
+        """
+        A transaction to perform puts and deletes in an atomic manner
+
+        :returns: transaction object
+        """
+        return SharedSqliteDBTransaction(self.database)
+
+@ClassLogger
+class SharedSqliteDBNodeHistory(NodeHistory):
+    """
+    Shared SQLite database backend node history implementation
+
+    :param database: database manager
+    :type database: :class:`~DBManager`
+    """
+    def __init__(self, database):
+        self.database = database
+
+    def add(self, node, status):
+        """
+        Add status for system manager with on specified node
+
+        :param node: node name
+        :type node: str
+        :param status: status
+        :type status: :class:`SystemManagerStatus`
+        """
+        if not isinstance(status, SystemManagerStatus):
+            raise ValueError("'{0}' needs to be a '{1}'".format(status, SystemManagerStatus))
+
+        timestamp = status.timestamp.toISOFormattedString()
+        serializedStatus = status.toJSON(includeClassInfo=True)
+
+        self.database.write("begin")
+        self.database.write("""
+            insert into history (node, name, timestamp, status) values (?, ?, ?, ?)""",
+            (node, None, timestamp, serializedStatus))
+        updated = self.database.write("""
+            update status set status=? where node=? and name is null""",
+            (serializedStatus, node))
+        if updated < 1:
+            self.database.write("""
+                insert into status (node, name, status) values (?, ?, ?)""",
+                (node, None, serializedStatus))
+        self.database.write("commit")
+
+    def get(self, node, limit=None):
+        """
+        Get status history for system manager on specified node
+
+        :param node: node name
+        :type node: str
+        :param limit: number of statuses to return
+        :type limit: int
+        :returns: list of history entries
+        :rtype: [:class:`Entry`]
+        """
+        rows = self.database.query("""
+            select status from history
+            where node=? and name is null
+            order by timestamp desc
+            limit ?""",
+            (node, limit or -1))
+        entries = []
+        for row in rows:
+            status = JSONSerializable.fromJSON(row["status"])
+            entries.append(Entry(status.timestamp, status))
+        return entries
+
+    def getAll(self):
+        """
+        Get status history for all system managers on all nodes
+
+        :returns: list of history entries
+        :rtype: [:class:`Entry`]
+        """
+        rows = self.database.query("""
+            select status from history
+            where name is null
+            order by timestamp desc""")
+        entries = []
+        for row in rows:
+            status = JSONSerializable.fromJSON(row["status"])
+            entries.append(Entry(status.timestamp, status))
+        return entries
+
+    def getLatest(self, node):
+        """
+        Get latest status for system manager on specified node
+
+        :param node: node name
+        :type node: str
+        :returns: history entry
+        :rtype: :class:`Entry`
+        """
+        rows = self.database.query(
+            """
+            select status from status
+            where node=? and name is null""",
+            (node,))
+        if rows:
+            status = JSONSerializable.fromJSON(rows[0]["status"])
+            return Entry(status.timestamp, status)
+        return None
+
+    def remove(self, node=None):
+        """
+        Remove status history for system managers on specified nodes.
+
+        node:
+            remove history for specific node
+
+        no node
+            remove history for all nodes
+
+        :param node: node name
+        :type node: str
+        """
+        self.database.write("begin")
+        if node:
+            # remove history for specific node
+            self.database.write("""
+                delete from status
+                where node=? and name is null""",
+                (node,))
+            self.database.write("""
+                delete from history
+                where node=? and name is null""",
+                (node,))
+        else:
+            # remove history for all nodes
+            self.database.write("""
+                delete from status
+                where name is null""")
+            self.database.write("""
+                delete from history
+                where name is null""")
+        self.database.write("commit")
+
+@ClassLogger
+class SharedSqliteDBTransaction(object):
+    """
+    Shared SQLite database transaction that behaves like a regular database
+    transaction that automatically begins, wrapping multiple statements and
+    then commits
+
+    :param database: database manager
+    :type database: :class:`~DBManager`
+    :param statements: statements
+    :type statements: [:class:`~etcd3.transactions.Delete` or etcd3.transactions.Put]
+    """
+    def __init__(self, database, statements=None):
+        self.database = database
+        self.statements = statements if statements else []
+
+    def commit(self):
+        """
+        Commit all non-committed statements
+        """
+        if not self.statements:
+            self.log.warn("No statements to commit")
+            return
+        self.database.write("begin")
+        for statement in self.statements:
+            self.database.write(*statement)
+        self.database.write("commit")
+        del self.statements[:]
+
+    def delete(self, key):
+        """
+        Add a delete statement to the transaction to delete the specified key
+
+        :param key: key
+        :type key: str
+        """
+        self.statements.append(("""
+            delete from key_value_store
+            where key=?""",
+            (key,)))
+        return self
+
+    def put(self, key, value, lease=None):
+        """
+        Add a put statement to the transaction to put the value at the specified key
+
+        :param key: key
+        :type key: str
+        :param value: value
+        :type value: str
+        """
+        self.statements.append(("""
+            insert or replace into key_value_store (key, value) values (?, ?)""",
+            (key, value)))
+        return self
