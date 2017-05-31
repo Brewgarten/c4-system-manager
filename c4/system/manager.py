@@ -959,8 +959,12 @@ class SystemManagerImplementation(object):
         if self.clusterInfo.role == Roles.ACTIVE:
             (node, name) = self.parseFrom(envelope.From)
             self.log.debug("Received status from %s", envelope.From)
-            history = Backend().deviceHistory
-            history.add(node, name, message)
+            if name:
+                history = Backend().deviceHistory
+                history.add(node, name, message)
+            else:
+                history = Backend().nodeHistory
+                history.add(node, message)
 
         else:
             self.log.error("Received status response from '%s' but current role is '%s'",
