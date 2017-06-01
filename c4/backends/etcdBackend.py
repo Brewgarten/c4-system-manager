@@ -71,7 +71,7 @@ class EtcdBackend(BackendImplementation):
     def nodeHistory(self):
         return EtcdNodeHistory(self.client)
 
-    def ClusterInfo(self, node, address, systemManagerAddress, role, state):
+    def ClusterInfo(self, node, address, systemManagerAddress=None, role=None, state=None):
         return EtcdClusterInfo(self, node, address)
 
 @retry(attempts=3, interval=0.1, exceptions=(etcd3.exceptions.ConnectionFailedError,))
