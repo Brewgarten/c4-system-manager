@@ -684,6 +684,15 @@ class DBClusterInfo(object):
         with self._systemManagerAddress.get_lock():
             self._systemManagerAddress.value = address
 
+class DeviceManagerConfiguration(JSONSerializable):
+    def __init__(self, startCommand, statusCommand, stopCommand, statusRegex=None, rc=0, alwaysOn=True):
+        self.startCommand = startCommand
+        self.statusCommand = statusCommand
+        self.stopCommand = stopCommand
+        self.statusRegex = statusRegex
+        self.alwaysOn = alwaysOn
+        self.rc = rc
+
 class DeviceInfo(JSONSerializable):
     """
     Device manager information

@@ -40,6 +40,7 @@ import ctypes
 import inspect
 import logging
 import multiprocessing
+import re
 import sys
 import time
 
@@ -48,6 +49,8 @@ from c4.messaging import (DealerRouter,
                           callMessageHandler)
 from c4.system.configuration import States
 from c4.system.messages import LocalStopDeviceManager
+from c4.utils.command import run
+from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import callWithVariableArguments, getVariableArguments
@@ -357,6 +360,82 @@ class DeviceManagerImplementation(object):
         else:
             self.log.error("'%s' does not match enum of type '%s'", state, States)
 
+@ClassLogger
+class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
+    """
+    Device manager implementation for services with a specified DeviceManagerConfiguration
+    """
+    def __init__(self, clusterInfo, name, properties=None):
+        super(ConfiguredDeviceManagerImplementation, self).__init__(clusterInfo, name, properties=properties)
+        if properties.has_key("configuration"):
+            self.dmConfiguration = properties["configuration"]
+        else:
+            raise ValueError("No DeviceManagerConfiguration found in properties.")
+        self.statusWarningIssued = False
+
+    def handleLocalStartDeviceManager(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.LocalStartDeviceManager` messages
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        self.log.info("Starting %s device manager", self.name)
+        self.start()
+        return super(ConfiguredDeviceManagerImplementation, self).handleLocalStartDeviceManager(message, envelope)
+
+    def handleLocalStopDeviceManager(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.LocalStopDeviceManager` messages
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        if not self.dmConfiguration.alwaysOn:
+            self.stop()
+        return super(ConfiguredDeviceManagerImplementation, self).handleLocalStopDeviceManager(message, envelope)
+
+
+    def handleStatus(self):
+        """
+        The handler for an incoming Status message.
+        """
+        stdout, stderr, rc = run(self.dmConfiguration.statusCommand)
+        if self.dmConfiguration.statusRegex:
+            runningPattern = re.compile(self.dmConfiguration.statusRegex)
+            match = runningPattern.search(stdout)
+            status = ConfiguredDeviceManagerStatus.OK if match else ConfiguredDeviceManagerStatus.FAILED
+        else:
+            status = ConfiguredDeviceManagerStatus.OK if rc == self.dmConfiguration.rc else ConfiguredDeviceManagerStatus.FAILED
+
+        if status == ConfiguredDeviceManagerStatus.FAILED:
+            if not self.statusWarningIssued:
+                self.log.warning("Unexpected %s status: stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
+                self.statusWarningIssued = True
+        else:
+            self.statusWarningIssued = False
+        return ConfiguredDeviceManagerStatus(self.state, status)
+
+    @operation
+    def start(self):
+        """
+        Start the configured service.
+        """
+        stdout, stderr, rc = run(self.dmConfiguration.startCommand)
+        if rc != 0:
+            self.log.error("Error starting {0} service. stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
+
+    @operation
+    def stop(self):
+        """
+        Stop the configured service.
+        """
+        stdout, stderr, rc = run(self.dmConfiguration.stopCommand)
+        if rc != 0:
+            self.log.error("Error stopping {0} service. stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
+
 class DeviceManagerStatus(JSONSerializable):
     """
     Device manager status which can be extended to include additional details
@@ -365,3 +444,17 @@ class DeviceManagerStatus(JSONSerializable):
     def __init__(self):
         super(DeviceManagerStatus, self).__init__()
         self.timestamp =  Datetime.utcnow()
+
+class ConfiguredDeviceManagerStatus(DeviceManagerStatus):
+    """
+    Policy engine device manager status
+    :param state: state
+    :type state: :class:`~c4.system.configuration.States`
+    """
+    OK = "OK"
+    FAILED = "FAILED"
+
+    def __init__(self, state, status):
+        super(ConfiguredDeviceManagerStatus, self).__init__()
+        self.state = state
+        self.status = status

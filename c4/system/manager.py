@@ -23,7 +23,7 @@ from c4.system.configuration import (ConfigurationInfo,
                                      NodeInfo,
                                      States,
                                      Roles)
-from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation
+from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation, ConfiguredDeviceManagerImplementation
 from c4.system.messages import (DisableNode,
                                 LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
                                 RegistrationNotification,
@@ -76,7 +76,7 @@ class SystemManager(PeerRouter):
         :returns: whether start was successful
         :rtype: bool
         """
-        self.log.info("starting system mananager '%s'", self.address)
+        self.log.info("Starting system mananager '%s'", self.address)
         started = super(SystemManager, self).start(timeout=timeout)
         if not started:
             return False
@@ -108,6 +108,7 @@ class SystemManager(PeerRouter):
             self.log.info("terminating registration for '%s'", self.address)
             return False
 
+        self.log.info("System mananager '%s' started", self.address)
         return True
 
     def stop(self, timeout=60):
@@ -119,7 +120,7 @@ class SystemManager(PeerRouter):
         :returns: whether stop was successful
         :rtype: bool
         """
-        self.log.info("stopping system manager '%s'", self.address)
+        self.log.info("Stopping system manager '%s'", self.address)
 
         # stop child device managers, this is required, otherwise device manager processes won't stop
         if self.clusterInfo.state == States.RUNNING:
@@ -261,7 +262,10 @@ class SystemManagerImplementation(object):
 
     def getDeviceManagerImplementations(self):
         # retrieve available device manager implementations
-        deviceManagerImplementations = sorted(getModuleClasses(c4.devices, DeviceManagerImplementation))
+        unsortedImplementations = getModuleClasses(c4.devices, DeviceManagerImplementation)
+        #Special case for generic services handled through configuration
+        unsortedImplementations.append(ConfiguredDeviceManagerImplementation)
+        deviceManagerImplementations = sorted(unsortedImplementations)
 
         if DeviceManagerImplementation in deviceManagerImplementations:
             deviceManagerImplementations.remove(DeviceManagerImplementation)
