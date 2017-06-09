@@ -965,7 +965,7 @@ class EtcdConfiguration(Configuration):
         deviceStateKeyExpression = re.compile(r".*/devices/[^/]+/state")
         ignoreStates = {States.MAINTENANCE, States.REGISTERED, States.UNDEPLOYED}
         transaction = EtcdTransaction(self.client)
-        for value, metadata in self.client.get_all():
+        for value, metadata in self.client.get_prefix("/nodes/"):
             if deviceStateKeyExpression.match(metadata.key) and deserialize(value) not in ignoreStates:
                 transaction.put(metadata.key, serializedState)
         transaction.commit()
