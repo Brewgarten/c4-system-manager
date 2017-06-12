@@ -1,0 +1,218 @@
+{
+    "@class": "c4.system.configuration.ConfigurationInfo",
+    "aliases": {},
+    "nodes": {
+        "active": {
+            "@class": "c4.system.configuration.NodeInfo",
+            "devices": {
+                "policyengine": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "policyengine",
+                    "type": "c4.devices.policyengine.PolicyEngineManager"
+                },
+                "ldap": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "ldap",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /sbin/service slapd start",
+                            "statusCommand": "/sbin/service slapd status",
+                            "statusRegex": "slapd \\(pid .*\\) is running...",
+                            "stopCommand": "/usr/bin/sudo -u root /sbin/service slapd stop",
+                            "alwaysOn": true
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                },
+                "sssd": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "sssd",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /sbin/service sssd start",
+                            "statusCommand": "/sbin/service sssd status",
+                            "statusRegex": "sssd \\(pid .*\\) is running...",
+                            "stopCommand": "/usr/bin/sudo -u root /sbin/service sssd stop",
+                            "alwaysOn": true
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                },
+                "rstudio": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "rstudio",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /usr/sbin/rstudio-server start",
+                            "statusCommand": "/usr/bin/sudo -u root /usr/sbin/rstudio-server status",
+                            "statusRegex": "start/running",
+                            "stopCommand": "/usr/bin/sudo -u root /usr/sbin/rstudio-server stop",
+                            "alwaysOn": false
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                },
+                "aspera": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "aspera",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /opt/ibm/dsserver/scripts/aspera-container-op.sh recreate",
+                            "statusCommand": "/usr/bin/sudo -u root /opt/ibm/dsserver/scripts/aspera-container-op.sh status",
+                            "statusRegex": "^ACTIVE",
+                            "stopCommand": "/usr/bin/sudo -u root /opt/ibm/dsserver/scripts/aspera-container-op.sh remove",
+                            "alwaysOn": false
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                },
+                "webconsole": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "webconsole",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u db2inst1 -i /opt/ibm/dsserver/bin/start.sh",
+                              "statusCommand": "/usr/bin/sudo -u db2inst1 -i /opt/ibm/dsserver/bin/status.sh",
+                            "statusRegex": ".*SERVER STATUS:\\sACTIVE",
+                            "stopCommand": "/usr/bin/sudo -u db2inst1 -i /opt/ibm/dsserver/bin/stop.sh",
+                            "alwaysOn": false
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                }
+            },
+            "name": "active",
+            "properties": {
+                "address": "tcp://ip:5000"
+               },
+            "role": {
+                "@class": "c4.system.configuration.Roles",
+                "name": "ACTIVE"
+            }
+        },
+        "passive": {
+            "@class": "c4.system.configuration.NodeInfo",
+            "devices": {
+                "sssd": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "sssd",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /sbin/service sssd start",
+                            "statusCommand": "/sbin/service sssd status",
+                            "statusRegex": "sssd \\(pid .*\\) is running...",
+                            "stopCommand": "/usr/bin/sudo -u root /sbin/service sssd stop",
+                            "alwaysOn": true
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                }
+            },
+            "name": "passive",
+            "properties": {
+                "address": "tcp://ip:5000"
+               },
+            "role": {
+                "@class": "c4.system.configuration.Roles",
+                "name": "PASSIVE"
+            }
+        },
+        "thin": {
+            "@class": "c4.system.configuration.NodeInfo",
+            "devices": {
+                "sssd": {
+                    "@class": "c4.system.configuration.DeviceInfo",
+                    "name": "sssd",
+                    "properties": {
+                        "configuration": {
+                            "@class": "c4.system.configuration.DeviceManagerConfiguration",
+                            "startCommand": "/usr/bin/sudo -u root /sbin/service sssd start",
+                            "statusCommand": "/sbin/service sssd status",
+                            "statusRegex": "sssd \\(pid .*\\) is running...",
+                            "stopCommand": "/usr/bin/sudo -u root /sbin/service sssd stop",
+                            "alwaysOn": true
+                        }
+                    },
+                    "type": "c4.system.deviceManager.ConfiguredDeviceManagerImplementation"
+                }
+            },
+            "name": "thin",
+            "properties": {
+                "address": "tcp://ip:5000"
+               },
+            "role": {
+                "@class": "c4.system.configuration.Roles",
+                "name": "THIN"
+            }
+        }
+    },
+    "platform": {
+        "@class": "c4.system.configuration.PlatformInfo",
+        "description": "Represents a bare-metal or VM platform for dashDB-mpp",
+        "name": "dashDB-mpp",
+        "settings": {
+            "actions_file": "/opt/ibm/appliance/platform/management/systemmanager/systemmanager/actions.json",
+            "addMissingDMs": false,
+            "alert_manager_db_profile_name": "PUFFIN",
+            "alert_manager_enabled": true,
+            "alert_manager_timer_interval": 10000,
+            "alert_manager_wti_port": "11081",
+            "BMfloatingInterface": "bond1:0",
+            "cluster_managed_by_gpfs" : true,
+            "configuredPoliciesEnabled": [],
+            "db2.database": "BLUDB",
+            "db2.fence.user": "db2fenc1",
+            "db2.home": "/opt/ibm/db2/current",
+            "db2.instance": "db2inst1",
+            "db2.instance.user": "db2inst1",
+            "db2.instance.group": "db2iadm1",
+            "db2_basedir": "/opt/ibm/db2/current",
+            "db2_enabled": true,
+            "dbgroup": "db2iadm1",
+            "dbinstance": "db2inst1",
+            "filesystem_usage_threshold" : 90,
+            "floatingIPAddress": "",
+            "floatingNetMask": "",
+            "gpfs_enabled": true,
+            "inactivity_threshold_gpfscluster": 20000,
+            "inactivity_threshold_gpfsstorage": 20000,
+            "inactivity_threshold_wti": 300000,
+            "init_required_components": ["db2"],
+            "init_stages": [5, 10],
+            "initial_policy_engine": "dynamite.system.stateMachine.nodeManager._states.nodeManagerBootstrapState.ApplianceBootStrapPolicyEngine",
+            "initial_policy_timer_interval": 8000,
+            "layout":"dynamite.system.layouts.puffin.DashDBVMStrategy",
+            "log_dir": "/head/sm/log",
+            "mandatory_device_db2": true,
+            "mln.path.pattern": "/data/db2inst1/NODE{:04d}",
+            "monitor_backends" : [ "file", "smlog", "etcd" ],
+            "placement.strategy": "dynamite.placement.strategies.BinPacking",
+            "platform_manager_log" : "/var/adm/sm/log",
+            "platform_manager_rest" : "/var/adm/sm/rest",
+            "platform_manager_trace" : "/var/adm/sm/trace",
+            "policy_timer_interval": 5000,
+            "register_timer_interval": 3000,
+            "rest_listen_address": "",
+            "rest_port": 9443,
+            "restart_limit_db2": 2,
+            "restart_limit_gpfsstorage": 18,
+            "restart_limit_wti": 2,
+            "skip_BOM": true,
+            "smdb_dir": "<gpfs:head>/sm/db",
+            "ssl_certificate_file": "ssl.crt",
+            "ssl_enabled": true,
+            "ssl_key_file": "ssl.key",
+            "start_required_components": ["db2"],
+            "system_starting_timeout": 4500,
+            "VMfloatingInterface": "eth1:0",
+            "wall_ip": "9.158.143.8"
+        },
+        "type": "dynamite.system.platforms.x86.CloudManager"
+    }
+}

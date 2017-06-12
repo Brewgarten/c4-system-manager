@@ -423,9 +423,14 @@ class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
         """
         Start the configured service.
         """
+        if self.state == States.STARTING:
+            self.log.debug("%s received start request, but state is already STARTING.", self.name)
+            return
+        self.state = States.STARTING
         stdout, stderr, rc = run(self.dmConfiguration.startCommand)
         if rc != 0:
             self.log.error("Error starting {0} service. stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
+        self.state = States.RUNNING
 
     @operation
     def stop(self):
