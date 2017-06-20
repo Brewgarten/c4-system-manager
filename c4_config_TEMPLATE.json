@@ -193,9 +193,6 @@
             "mln.path.pattern": "/data/db2inst1/NODE{:04d}",
             "monitor_backends" : [ "file", "smlog", "etcd" ],
             "placement.strategy": "dynamite.placement.strategies.BinPacking",
-            "platform_manager_log" : "/var/adm/sm/log",
-            "platform_manager_rest" : "/var/adm/sm/rest",
-            "platform_manager_trace" : "/var/adm/sm/trace",
             "policy_timer_interval": 5000,
             "register_timer_interval": 3000,
             "rest_listen_address": "",
@@ -209,7 +206,7 @@
             "ssl_enabled": true,
             "ssl_key_file": "ssl.key",
             "start_required_components": ["db2"],
-            "system_starting_timeout": 4500,
+            "system_starting_timeout": 300,
             "VMfloatingInterface": "eth1:0",
             "wall_ip": "9.158.143.8"
         },

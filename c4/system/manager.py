@@ -2,7 +2,8 @@
 
 import argparse
 import imp
-import logging
+import json
+import logging.config
 import multiprocessing
 import os
 import re
@@ -10,14 +11,16 @@ import signal
 import socket
 import sys
 import time
-
 import pkg_resources
+from cloghandler import ConcurrentRotatingFileHandler
 
 import c4.devices
-from c4.messaging import (MessageTracker, MessagingException,
+from c4.messaging import (MessageTracker,
+                          MessagingException,
                           PeerRouter,
                           RouterClient,
-                          callMessageHandler)
+                          callMessageHandler,
+                          DEFAULT_IPC_PATH)
 from c4.system import egg
 from c4.system.configuration import (ConfigurationInfo,
                                      NodeInfo,
@@ -33,6 +36,7 @@ from c4.utils.logutil import ClassLogger
 from c4.utils.util import getFullModuleName, getModuleClasses
 import platform as platformSpec
 from c4.system.backend import Backend, BackendInfo
+
 
 
 log = logging.getLogger(__name__)
@@ -1269,8 +1273,6 @@ def main():
     """
     Main function of the system manager
     """
-    logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s:%(process)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
-
     currentNodeName = platformSpec.node().split(".")[0]
 
     # parse command line arguments
@@ -1278,6 +1280,8 @@ def main():
 
     parentParser = argparse.ArgumentParser(add_help=False)
     parentParser.add_argument("-b", "--backend", action="store", default=os.path.join(DEFAULT_CONFIGURATION_PATH, "backend.json"), help="Backend configuration file")
+    parentParser.add_argument("-i", "--pid-file", action="store", default=os.path.join(DEFAULT_CONFIGURATION_PATH, "c4.pid"), help="PID file")
+    parentParser.add_argument("-l", "--logging-config", action="store", default=pkg_resources.resource_filename("c4.data", "config/c4_logging_config.json"), help="Backend configuration file")
     parentParser.add_argument("-n", "--node", action="store", default=currentNodeName, help="Node name for this system manager")
     parentParser.add_argument("-p", "--port", action="store", dest="node_port", type=int, default=5000, help="Port for this system manager")
     parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
@@ -1300,22 +1304,26 @@ def main():
         parents=[parentParser]
     )
     joinParser.add_argument("address", action="store", help="Address of the active system manager")
-
     args = parser.parse_args()
 
-    if args.verbose > 0:
-        log.setLevel(logging.DEBUG)
-        logging.getLogger("c4.system.deviceManager.DeviceManager").setLevel(logging.INFO)
-        logging.getLogger("c4.system.deviceManager.DeviceManagerImplementation").setLevel(logging.DEBUG)
-        logging.getLogger("c4.system.manager.SystemManager").setLevel(logging.INFO)
-        logging.getLogger("c4.system.manager.SystemManagerImplementation").setLevel(logging.DEBUG)
-    if args.verbose > 1:
-        logging.getLogger("c4.system.deviceManager.DeviceManager").setLevel(logging.DEBUG)
-        logging.getLogger("c4.system.manager.SystemManager").setLevel(logging.DEBUG)
-    if args.verbose > 2:
-        logging.getLogger("c4.messaging").setLevel(logging.DEBUG)
-    if args.verbose > 3:
-        logging.getLogger("c4.system.db").setLevel(logging.DEBUG)
+    # Setup logging
+    with open(args.logging_config, 'r') as logConfigFile:
+        configDict = json.load(logConfigFile)
+        logging.config.dictConfig(configDict)
+
+    # Check for pidfile. If it exists, exit. If not, create it and continue starting up.
+    if os.path.exists(args.pid_file):
+        log.warning("System Manager is already running.", args.pid_file)
+        return 1
+
+    with open(args.pid_file, "w") as pidfile:
+        pidfile.write(str(os.getpid()))
+
+    # Clean up any remaining .ipc files
+    dirFiles = os.listdir(DEFAULT_IPC_PATH)
+    for dirFile in dirFiles:
+        if dirFile.endswith(".ipc"):
+            os.remove(os.path.join(DEFAULT_IPC_PATH, dirFile))
 
     # check for backend
     exampleProperties = {
@@ -1439,7 +1447,9 @@ def main():
         while not stopFlag.is_set():
             time.sleep(1)
     systemManager.stop()
+    os.remove(args.pid_file)
     return 0
 
 if __name__ == '__main__':
+    logging.basicConfig(format='%(asctime)s [%(levelname)s] <%(processName)s:%(process)s> [%(name)s(%(filename)s:%(lineno)d)] - %(message)s', level=logging.INFO)
     sys.exit(main())

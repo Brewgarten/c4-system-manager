@@ -804,6 +804,10 @@ class NodeInfo(JSONSerializable):
             self.devices[device.name] = device
         return self
 
+    @property
+    def stopped(self):
+        return self.state == States.REGISTERED or self.state == States.DEPLOYED
+
     def toJSONSerializable(self, includeClassInfo=False):
         serializableDict = super(NodeInfo, self).toJSONSerializable(includeClassInfo=includeClassInfo)
         # remove empty properties

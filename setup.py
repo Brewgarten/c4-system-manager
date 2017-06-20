@@ -29,7 +29,8 @@ setup(
     },
     package_data = {
         "c4.data": [
-            "sql/*.sql"
+            "sql/*.sql",
+            "config/*.json"
         ],
     }
 )

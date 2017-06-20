@@ -968,7 +968,8 @@ class EtcdConfiguration(Configuration):
         for value, metadata in self.client.get_prefix("/nodes/"):
             if deviceStateKeyExpression.match(metadata.key) and deserialize(value) not in ignoreStates:
                 transaction.put(metadata.key, serializedState)
-        transaction.commit()
+        if transaction.statements:
+            transaction.commit()
 
     def resolveAlias(self, alias):
         """
