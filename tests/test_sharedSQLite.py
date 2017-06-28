@@ -258,13 +258,13 @@ class TestDBManager():
         os.remove(backend.database.fullDBName)
 
         # automatic restore
-        backend.database = DBManager(backend.info)
-        rows = backend.database.query("select * from t_sm_history")
+        database = backend.database
+        rows = database.query("select * from t_sm_history")
         assert len(rows) == numberOfRows
 
         # manual restore
-        backend.database.restore(backupFileName)
-        rows = backend.database.query("select * from t_sm_history")
+        database.restore(backupFileName)
+        rows = database.query("select * from t_sm_history")
         assert len(rows) == numberOfRows
 
     def test_write(self, temporarySharedSQLiteBackend):

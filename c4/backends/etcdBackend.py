@@ -2,9 +2,11 @@
 etcd based backend implementation
 """
 import re
+import time
 
 import etcd3
 from etcd3.client import _handle_errors, KVMetadata
+from etcd3.exceptions import PreconditionFailedError
 import grpc
 
 from c4.system.backend import BackendKeyValueStore, BackendImplementation
@@ -107,7 +109,7 @@ class EtcdClient(etcd3.Etcd3Client):
         # note that we do not create instances by default because we do not currently use them
         self.watcher = None
         self.clusterstub = None
-        self.leasestub = None
+        self.leasestub = etcd3.etcdrpc.LeaseStub(self.channel)
         self.maintenancestub = None
         self.transactions = etcd3.Transactions()
 
@@ -988,11 +990,21 @@ class EtcdConfiguration(Configuration):
 class EtcdDeviceHistory(DeviceHistory):
     """
     Device manager history
-    """
-    def __init__(self, client):
-        self.client = client
 
-    def add(self, node, name, status):
+    :param client: etcd client
+    :type client: :class:`~etcd3.Etcd3Client`
+    :param defaultLeaseTimeWindow: default lease time window (in seconds)
+    :type defaultLeaseTimeWindow: int
+    :param defaultTimeToLive: default time to live (in seconds)
+    :type defaultTimeToLive: int
+    """
+    def __init__(self, client, defaultLeaseTimeWindow=60, defaultTimeToLive=3600):
+        super(EtcdDeviceHistory, self).__init__()
+        self.client = client
+        self.defaultLeaseTimeWindow = defaultLeaseTimeWindow
+        self.defaultTimeToLive = defaultTimeToLive
+
+    def add(self, node, name, status, ttl=None):
         """
         Add status for device manager with specified name on specified node
 
@@ -1002,6 +1014,8 @@ class EtcdDeviceHistory(DeviceHistory):
         :type name: str
         :param status: status
         :type status: :class:`DeviceManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
         if not isinstance(status, DeviceManagerStatus):
             raise ValueError("'{0}' needs to be a '{1}'".format(status, DeviceManagerStatus))
@@ -1009,9 +1023,24 @@ class EtcdDeviceHistory(DeviceHistory):
         statusKey = "/".join(["/history", node, name, status.timestamp.toISOFormattedString()])
         latestStatusKey = "/".join(["/status", node, name])
 
+        if ttl is None:
+            ttl = self.defaultTimeToLive
+
+        # calculate lease id based on time to live and lease interval time window
+        now = int(time.time())
+        leaseId = now + ttl + self.defaultLeaseTimeWindow - now % self.defaultLeaseTimeWindow
+
+        try:
+            # check if the lease already exists
+            self.client.get_lease_info(leaseId)
+        except Exception as PreconditionFailedError:
+            # create a new lease
+            expiration = leaseId - now
+            self.client.lease(ttl=expiration, lease_id=leaseId)
+
         serializedStatus = status.toJSON(includeClassInfo=True)
-        self.client.put(latestStatusKey, serializedStatus)
-        self.client.put(statusKey, serializedStatus)
+        self.client.put(latestStatusKey, serializedStatus, lease=leaseId)
+        self.client.put(statusKey, serializedStatus, lease=leaseId)
 
     def get(self, node, name, limit=None):
         """
@@ -1249,11 +1278,21 @@ class EtcdKeyValueStore(BackendKeyValueStore):
 class EtcdNodeHistory(NodeHistory):
     """
     System manager history
-    """
-    def __init__(self, client):
-        self.client = client
 
-    def add(self, node, status):
+    :param client: etcd client
+    :type client: :class:`~etcd3.Etcd3Client`
+    :param defaultLeaseTimeWindow: default lease time window (in seconds)
+    :type defaultLeaseTimeWindow: int
+    :param defaultTimeToLive: default time to live (in seconds)
+    :type defaultTimeToLive: int
+    """
+    def __init__(self, client, defaultLeaseTimeWindow=60, defaultTimeToLive=3600):
+        super(NodeHistory, self).__init__()
+        self.client = client
+        self.defaultLeaseTimeWindow = defaultLeaseTimeWindow
+        self.defaultTimeToLive = defaultTimeToLive
+
+    def add(self, node, status, ttl=None):
         """
         Add status for system manager with on specified node
 
@@ -1261,6 +1300,8 @@ class EtcdNodeHistory(NodeHistory):
         :type node: str
         :param status: status
         :type status: :class:`SystemManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
         if not isinstance(status, SystemManagerStatus):
             raise ValueError("'{0}' needs to be a '{1}'".format(status, SystemManagerStatus))
@@ -1268,9 +1309,24 @@ class EtcdNodeHistory(NodeHistory):
         statusKey = "/".join(["/nodeHistory", node, status.timestamp.toISOFormattedString()])
         latestStatusKey = "/".join(["/status", node])
 
+        if ttl is None:
+            ttl = self.defaultTimeToLive
+
+        # calculate lease id based on time to live and lease interval time window
+        now = int(time.time())
+        leaseId = now + ttl + self.defaultLeaseTimeWindow - now % self.defaultLeaseTimeWindow
+
+        try:
+            # check if the lease already exists
+            self.client.get_lease_info(leaseId)
+        except Exception as PreconditionFailedError:
+            # create a new lease
+            expiration = leaseId - now
+            self.client.lease(ttl=expiration, lease_id=leaseId)
+
         serializedStatus = status.toJSON(includeClassInfo=True)
-        self.client.put(latestStatusKey, serializedStatus)
-        self.client.put(statusKey, serializedStatus)
+        self.client.put(latestStatusKey, serializedStatus, lease=leaseId)
+        self.client.put(statusKey, serializedStatus, lease=leaseId)
 
     def get(self, node, limit=None):
         """

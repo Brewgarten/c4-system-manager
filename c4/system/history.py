@@ -8,7 +8,7 @@ class DeviceHistory(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def add(self, node, name, status):
+    def add(self, node, name, status, ttl=None):
         """
         Add status for device manager with specified name on specified node
 
@@ -18,6 +18,8 @@ class DeviceHistory(object):
         :type name: str
         :param status: status
         :type status: :class:`DeviceManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
 
     @abstractmethod
@@ -100,7 +102,7 @@ class NodeHistory(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def add(self, node, status):
+    def add(self, node, status, ttl=None):
         """
         Add status for system manager with on specified node
 
@@ -108,6 +110,8 @@ class NodeHistory(object):
         :type node: str
         :param status: status
         :type status: :class:`SystemManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
 
     @abstractmethod

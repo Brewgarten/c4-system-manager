@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from c4.system.backend import Backend
@@ -71,6 +73,28 @@ class TestDeviceHistory():
 
         # make sure the entry is the latest
         assert history.getLatest("node1", "device1").status.test == "three"
+
+    def test_lease(self, backend):
+
+        history = Backend().deviceHistory
+        history.defaultLeaseTimeWindow = 1
+        history.defaultTimeToLive = 60
+
+        try:
+            # add entries with varying times to live
+            history.add("node1", "device1", MockDeviceManagerStatus("one", Datetime(2000, 1, 1)), ttl=1)
+            history.add("node1", "device1", MockDeviceManagerStatus("two", Datetime(2000, 1, 2)), ttl=1)
+            history.add("node1", "device1", MockDeviceManagerStatus("three", Datetime(2000, 1, 3)), ttl=60)
+            history.add("node1", "device1", MockDeviceManagerStatus("four", Datetime(2000, 1, 4)))
+
+            # let some entries expire while keeping others
+            time.sleep(3)
+
+            # make sure only non-expired device entries are there and in order of recency
+            entries = history.get("node1", "device1")
+            assert [entry.status.test for entry in entries] == ["four", "three"]
+        except NotImplementedError as error:
+            pytest.skip(error)
 
     def test_removeAllDevicesOnAllNodes(self, deviceHistory):
 
@@ -146,6 +170,28 @@ class TestNodeHistory():
 
         # make sure the entry is the latest
         assert history.getLatest("node1").status.test == "three"
+
+    def test_lease(self, backend):
+
+        history = Backend().nodeHistory
+        history.defaultLeaseTimeWindow = 1
+        history.defaultTimeToLive = 60
+
+        try:
+            # add entries with varying times to live
+            history.add("node1", MockSystemManagerStatus("one", Datetime(2000, 1, 1)), ttl=1)
+            history.add("node1", MockSystemManagerStatus("two", Datetime(2000, 1, 2)), ttl=1)
+            history.add("node1", MockSystemManagerStatus("three", Datetime(2000, 1, 3)), ttl=60)
+            history.add("node1", MockSystemManagerStatus("four", Datetime(2000, 1, 4)))
+
+            # let some entries expire while keeping others
+            time.sleep(3)
+
+            # make sure only non-expired device entries are there and in order of recency
+            entries = history.get("node1")
+            assert [entry.status.test for entry in entries] == ["four", "three"]
+        except NotImplementedError as error:
+            pytest.skip(error)
 
     def test_removeAllNodes(self, nodeHistory):
 

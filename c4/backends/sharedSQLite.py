@@ -286,12 +286,20 @@ class SharedSqliteDBBackend(BackendImplementation):
     """
     def __init__(self, info):
         super(SharedSqliteDBBackend, self).__init__(info)
-        self.database = DBManager(self.info)
-        self._configuration = SharedSqliteDBConfiguration(self.database)
 
     @property
     def configuration(self):
-        return self._configuration
+        """
+        Shared SQLite database backend based configuration instance
+        """
+        return SharedSqliteDBConfiguration(self.database)
+
+    @property
+    def database(self):
+        """
+        Shared SQLite database client instance
+        """
+        return DBManager(self.info)
 
     def ClusterInfo(self, node, address, systemManagerAddress, role, state):
         return SharedClusterInfo(self, node, address, systemManagerAddress, role, state)
@@ -960,7 +968,7 @@ class SharedSqliteDBDeviceHistory(DeviceHistory):
     def __init__(self, database):
         self.database = database
 
-    def add(self, node, name, status):
+    def add(self, node, name, status, ttl=None):
         """
         Add status for device manager with specified name on specified node
 
@@ -970,9 +978,14 @@ class SharedSqliteDBDeviceHistory(DeviceHistory):
         :type name: str
         :param status: status
         :type status: :class:`DeviceManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
         if not isinstance(status, DeviceManagerStatus):
             raise ValueError("'{0}' needs to be a '{1}'".format(status, DeviceManagerStatus))
+
+        if ttl is not None:
+            raise NotImplementedError("SQLite does not support time to live attributes")
 
         timestamp = status.timestamp.toISOFormattedString()
         serializedStatus = status.toJSON(includeClassInfo=True)
@@ -1251,7 +1264,7 @@ class SharedSqliteDBNodeHistory(NodeHistory):
     def __init__(self, database):
         self.database = database
 
-    def add(self, node, status):
+    def add(self, node, status, ttl=None):
         """
         Add status for system manager with on specified node
 
@@ -1259,9 +1272,14 @@ class SharedSqliteDBNodeHistory(NodeHistory):
         :type node: str
         :param status: status
         :type status: :class:`SystemManagerStatus`
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
         if not isinstance(status, SystemManagerStatus):
             raise ValueError("'{0}' needs to be a '{1}'".format(status, SystemManagerStatus))
+
+        if ttl is not None:
+            raise NotImplementedError("SQLite does not support time to live attributes")
 
         timestamp = status.timestamp.toISOFormattedString()
         serializedStatus = status.toJSON(includeClassInfo=True)
