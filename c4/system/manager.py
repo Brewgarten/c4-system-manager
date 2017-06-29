@@ -71,6 +71,14 @@ class SystemManager(PeerRouter):
 
         self.addHandler(self.implementation.routeMessage)
 
+    def run(self):
+        """
+        Override PeerRouter::run in order to introduce this hack
+        """
+        #FIXME: this is a hack to prevent etcd operations from hanging later on in this process.
+        Backend().configuration.getAliases()
+        super(SystemManager, self).run()
+
     def start(self, timeout=60):
         """
         Start the system manager
@@ -97,7 +105,8 @@ class SystemManager(PeerRouter):
         envelope.Message["version"] = getattr(c4.system, "__version__", "unknown")
 
         # wait for state change to registered
-        end = time.time() + 60
+        waitTime = Backend().configuration.getPlatform().settings.get("system.timeout", 60)
+        end = time.time() + waitTime
         try:
             while time.time() < end:
                 if self.clusterInfo.state == States.REGISTERING:
@@ -132,7 +141,8 @@ class SystemManager(PeerRouter):
             client.forwardMessage(StopNode(self.address))
 
             # give device managers and sub processes time to stop
-            end = time.time() + 60
+            waitTime = Backend().configuration.getPlatform().settings.get("global_system_timeout", 60)
+            end = time.time() + waitTime
             while time.time() < end:
                 if self.clusterInfo.state != States.REGISTERED:
                     self.log.debug("waiting for system manager '%s' to return to '%s', current state is '%s'",

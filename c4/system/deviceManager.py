@@ -47,6 +47,7 @@ import time
 from c4.messaging import (DealerRouter,
                           RouterClient,
                           callMessageHandler)
+from c4.system.backend import Backend
 from c4.system.configuration import States
 from c4.system.messages import LocalStopDeviceManager
 from c4.utils.command import run
@@ -145,6 +146,14 @@ class DeviceManager(DealerRouter):
         """
         return self.clusterInfo.node
 
+    def run(self):
+        """
+        Override DealerRouter::run in order to introduce this hack
+        """
+        #FIXME: this is a hack to prevent etcd operations from hanging later on in this process.
+        Backend().configuration.getAliases()
+        super(DeviceManager, self).run()
+
     def start(self, timeout=60):
         """
         Start the device manager
@@ -174,7 +183,8 @@ class DeviceManager(DealerRouter):
             client.sendRequest(LocalStopDeviceManager(self.routerAddress, self.address))
 
             # give device managers and sub processes time to stop
-            end = time.time() + 60
+            waitTime = Backend().configuration.getPlatform().settings.get("system.timeout", 60)
+            end = time.time() + waitTime
             while time.time() < end:
                 if self.implementation.state != States.REGISTERED:
                     self.log.debug("waiting for device manager '%s' to return to '%s', current state is '%s'",
