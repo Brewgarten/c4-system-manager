@@ -141,7 +141,7 @@ class SystemManager(PeerRouter):
             client.forwardMessage(StopNode(self.address))
 
             # give device managers and sub processes time to stop
-            waitTime = Backend().configuration.getPlatform().settings.get("global_system_timeout", 60)
+            waitTime = Backend().configuration.getPlatform().settings.get("system.timeout", 60)
             end = time.time() + waitTime
             while time.time() < end:
                 if self.clusterInfo.state != States.REGISTERED:
