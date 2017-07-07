@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import errno
 import imp
 import json
 import logging.config
@@ -154,11 +155,12 @@ class SystemManager(PeerRouter):
                 else:
                     break
             else:
-                self.log.error("waiting for system manager '%s' to return to '%s' timed out",
+                self.log.error("Waiting for system manager '%s' to return to '%s' timed out. Forcing termination of child processes.",
                                self.address,
                                repr(States.REGISTERED)
                                )
-                return False
+                # Force termination
+                client.forwardMessage(StopNode(self.address, terminate=True))
 
         return super(SystemManager, self).stop(timeout=timeout)
 
@@ -1038,19 +1040,24 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        self.log.debug("Received stop node message")
+        self.log.debug("Received stop node message. terminate: %s", envelope.terminate)
 
-        # send stop to all device managers if we have any running
-        if self.deviceManagers:
-
-            localStopNodeMessage = LocalStopNode(self.node)
-            self.messageTracker.add(envelope)
-            self.messageTracker.addRelatedMessage(envelope.MessageID, localStopNodeMessage.MessageID)
-            self.client.forwardMessage(localStopNodeMessage)
-
-        else:
+        if envelope.terminate:
+            for process in self.deviceManagers.values():
+                process.terminate()
             self.clusterInfo.state = States.REGISTERED
-            return {"state" : States.REGISTERED}
+        else:
+            # send stop to all device managers if we have any running
+            if self.deviceManagers:
+
+                localStopNodeMessage = LocalStopNode(self.node)
+                self.messageTracker.add(envelope)
+                self.messageTracker.addRelatedMessage(envelope.MessageID, localStopNodeMessage.MessageID)
+                self.client.forwardMessage(localStopNodeMessage)
+
+            else:
+                self.clusterInfo.state = States.REGISTERED
+                return {"state" : States.REGISTERED}
 
     def handleStopNodeResponse(self, message, envelope):
         """
@@ -1321,20 +1328,6 @@ def main():
         configDict = json.load(logConfigFile)
         logging.config.dictConfig(configDict)
 
-    # Check for pidfile. If it exists, exit. If not, create it and continue starting up.
-    if os.path.exists(args.pid_file):
-        log.warning("System Manager is already running.", args.pid_file)
-        return 1
-
-    with open(args.pid_file, "w") as pidfile:
-        pidfile.write(str(os.getpid()))
-
-    # Clean up any remaining .ipc files
-    dirFiles = os.listdir(DEFAULT_IPC_PATH)
-    for dirFile in dirFiles:
-        if dirFile.endswith(".ipc"):
-            os.remove(os.path.join(DEFAULT_IPC_PATH, dirFile))
-
     # check for backend
     exampleProperties = {
         "path.database": "/dev/shm",
@@ -1418,6 +1411,31 @@ def main():
             log.exception(e)
             return 1
 
+    # Check for pidfile. If it exists and the process is still running, exit.
+    # If not, create it and continue starting up.
+    if os.path.exists(args.pid_file):
+        with open(args.pid_file, "r") as pidfile:
+            pid = int(pidfile.read())
+            try:
+                os.kill(pid, 0)
+                log.warning("System Manager is already running with process id %s.", pid)
+                return 1
+            except OSError as err:
+                # EPERM indicates process is running but we didn't have permission to run kill against it
+                if err.errno == errno.EPERM:
+                    log.warning("System Manager is already running with process id %s.", pid)
+                    return 1
+                pass
+
+    with open(args.pid_file, "w") as pidfile:
+        pidfile.write(str(os.getpid()))
+
+    # Clean up any remaining .ipc files
+    dirFiles = os.listdir(DEFAULT_IPC_PATH)
+    for dirFile in dirFiles:
+        if dirFile.endswith(".ipc"):
+            os.remove(os.path.join(DEFAULT_IPC_PATH, dirFile))
+
     try:
         systemManager = SystemManager(clusterInfo)
     except MessagingException as e:
@@ -1445,7 +1463,7 @@ def main():
             # stop system manager
             stopFlag.set()
             # propagate interrupt back up to start method
-            os.kill(os.getpid(), signal.SIGINT)
+            raise KeyboardInterrupt
         else:
             # ignore interrupt signal
             signal.signal(signal.SIGINT, signal.SIG_IGN)

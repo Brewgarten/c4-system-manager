@@ -205,7 +205,8 @@ class StopNode(Envelope):
     :param To: node address
     :type To: str
     """
-    def __init__(self, To):
+    def __init__(self, To, terminate=False):
+        self.terminate = terminate
         super(StopNode, self).__init__("system-manager", To)
 
 class SystemManagerUpdate(Envelope):
