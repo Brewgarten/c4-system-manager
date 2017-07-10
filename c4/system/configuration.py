@@ -19,6 +19,7 @@ class Roles(Enum):
     ACTIVE = "active"
     PASSIVE = "passive"
     THIN = "thin"
+    DISABLED = "disabled"
 
 class States(Enum):
     """
@@ -806,7 +807,7 @@ class NodeInfo(JSONSerializable):
 
     @property
     def stopped(self):
-        return self.state == States.REGISTERED or self.state == States.DEPLOYED
+        return self.state == States.REGISTERED or self.state == States.DEPLOYED or self.state == States.MAINTENANCE
 
     def toJSONSerializable(self, includeClassInfo=False):
         serializableDict = super(NodeInfo, self).toJSONSerializable(includeClassInfo=includeClassInfo)

@@ -1469,11 +1469,24 @@ def main():
             signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGINT, interruptHandler)
 
-    started = systemManager.start()
+    role = configuration.getRole(args.node)
+    started = False
+    if role != Roles.DISABLED:
+        started = systemManager.start()
+        
+    tickCounter = 0
     if started:
         # note that we need to loop here because wait will not allow us to catch the interrupt
         while not stopFlag.is_set():
+            # Poll the role every 30 seconds and auto-shutdown if role moves to inactive
+            if tickCounter >= 30:
+                tickCounter = 0
+                role = configuration.getRole(args.node)
+                if role == Roles.DISABLED:
+                    log.info("Detected %s went inactive - Shutting Down!", args.node)
+                    stopFlag.set()
             time.sleep(1)
+            tickCounter += 1
     systemManager.stop()
     os.remove(args.pid_file)
     return 0

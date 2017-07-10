@@ -873,20 +873,30 @@ class EtcdConfiguration(Configuration):
 
         return nodeInfo
 
-    def getNodeNames(self):
+    def getNodeNames(self, includeDisabled=False):
         """
         Return a list of node names.
 
+        :param includeDisabled: Include nodes with Roles.DISABLED?
+        :type includeDisabled: boolean
         :returns: list of node names
         :rtype: list
         """
         nodesKey = "/nodes/"
         nodeNameExpression = re.compile(r"/nodes/[^/]+$")
-        return [
+        nodes = [
             value
             for value, metadata in self.client.get_prefix(nodesKey)
             if nodeNameExpression.match(metadata.key)
         ]
+        
+        # Filter out nodes that are inactive
+        if not includeDisabled:
+            for node in nodes:
+                if self.getRole(node) == Roles.DISABLED:
+                    nodes.remove(node)
+        
+        return nodes
 
     def removeDevice(self, node, fullDeviceName):
         """
