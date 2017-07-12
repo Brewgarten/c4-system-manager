@@ -852,7 +852,7 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         if self.clusterInfo.role == Roles.ACTIVE:
-            self.log.debug("Received start acknowlegdment from '%s'", envelope.From)
+            self.log.debug("Received start acknowlegdment from '%s': %s", envelope.From, message)
             (node_name, component_name) = self.parseFrom(envelope.From)
             if "devices" in message:
 
@@ -877,8 +877,8 @@ class SystemManagerImplementation(object):
         """
         self.log.debug("Received start node message")
         response = {}
-
-        if self.clusterInfo.state == States.REGISTERED or self.clusterInfo.state == States.REGISTERING:
+        nodeState = self.clusterInfo.state
+        if nodeState == States.REGISTERED or nodeState == States.REGISTERING:
             self.clusterInfo.state = States.RUNNING
             response["state"] = States.RUNNING
 
@@ -895,7 +895,7 @@ class SystemManagerImplementation(object):
             response["version_dict"] = versionDict
 
         else:
-            response["error"] = "Received start message but current state is '{0}'".format(self.clusterInfo.state)
+            response["error"] = "Received start message but current state is '{0}'".format(nodeState)
             self.log.error(response["error"])
         return response
 
@@ -1229,6 +1229,7 @@ class SystemManagerImplementation(object):
         :param messageId: message id individual start device messages are related to
         :type messageId: str
         """
+        localStartDeviceManagerMessages = []
         for fullDeviceName, deviceInfo in devices.iteritems():
             if deviceInfo.type in deviceManagerImplementationMap:
                 try:
@@ -1241,9 +1242,9 @@ class SystemManagerImplementation(object):
 
                     # send start message to device manager
                     localStartDeviceManager = LocalStartDeviceManager(self.node, "{0}/{1}".format(self.node, fullDeviceName))
+                    localStartDeviceManagerMessages.append(localStartDeviceManager)
                     self.messageTracker.addRelatedMessage(messageId, localStartDeviceManager.MessageID)
                     # TODO: make sure the device manager's message server is up and running, check for start timeout
-                    self.client.forwardMessage(localStartDeviceManager)
 
                 except MessagingException as e:
 
@@ -1263,6 +1264,9 @@ class SystemManagerImplementation(object):
                                         fullDeviceName, deviceInfo.type, self.node)}
                 }}
                 self.messageTracker.updateMessageContent(messageId, content)
+
+        for message in localStartDeviceManagerMessages:
+            self.client.forwardMessage(message)
 
     def validateNodeListAndTransformWildcards(self, node_list):
         """
@@ -1473,7 +1477,7 @@ def main():
     started = False
     if role != Roles.DISABLED:
         started = systemManager.start()
-        
+
     tickCounter = 0
     if started:
         # note that we need to loop here because wait will not allow us to catch the interrupt

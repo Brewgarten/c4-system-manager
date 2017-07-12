@@ -51,7 +51,6 @@ from c4.system.backend import Backend
 from c4.system.configuration import States
 from c4.system.messages import LocalStopDeviceManager
 from c4.utils.command import run
-from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import callWithVariableArguments, getVariableArguments
@@ -61,7 +60,8 @@ log = logging.getLogger(__name__)
 
 NOT_RUNNING_ACTIONS = set([
     "LocalStartDeviceManager",
-    "LocalStopDeviceManager"
+    "LocalStopDeviceManager",
+    "Status"
 ])
 
 def operation(implementation):
@@ -130,7 +130,9 @@ class DeviceManager(DealerRouter):
         addressParts.insert(0, clusterInfo.node)
         routerAddress = "/".join(addressParts[:-1])
         address = "/".join(addressParts)
-        super(DeviceManager, self).__init__(routerAddress, address, register=True, name="DM")
+        if not properties:
+            properties = {}
+        super(DeviceManager, self).__init__(routerAddress, address, maxThreads=properties.get("maxThreads", 2), register=True, name="DM")
         self.clusterInfo = clusterInfo
 
         # set up device manager implementation
@@ -349,11 +351,11 @@ class DeviceManagerImplementation(object):
         if self.state == States.RUNNING or envelope.Action in NOT_RUNNING_ACTIONS:
             return callMessageHandler(self, envelope)
         else:
-            error = "message with action '{action}' will not be handled because it is not allowed when the device is not in 'RUNNING' state, currently '{state}'".format(
+            warning = "message with action '{action}' will not be handled because it is not allowed when the device is not in 'RUNNING' state, currently '{state}'".format(
                 action=envelope.Action,
                 state=self.state.name)
-            self.log.error(error)
-            return {"error": error}
+            self.log.warning(warning)
+            return {"warning": warning}
 
     @property
     def state(self):

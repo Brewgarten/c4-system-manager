@@ -1,4 +1,5 @@
 import logging
+import time
 
 from c4.system.backend import Backend
 from c4.system.configuration import States
@@ -24,9 +25,13 @@ def test_system(system):
 
     assert system["rack1-master1"].start()
 
+    # Wait for ansync message handling
+    time.sleep(2)
+
     nodeInfo = configuration.getNode("rack1-master1", flatDeviceHierarchy=True)
     assert nodeInfo.state == States.RUNNING
     for deviceInfo in nodeInfo.devices.values():
+        log.info("Device: %s, State: %s", deviceInfo.type, deviceInfo.state)
         if deviceInfo.type ==  "c4.devices.Unknown":
             assert deviceInfo.state == States.REGISTERED
         else:
