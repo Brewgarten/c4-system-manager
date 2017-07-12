@@ -889,13 +889,13 @@ class EtcdConfiguration(Configuration):
             for value, metadata in self.client.get_prefix(nodesKey)
             if nodeNameExpression.match(metadata.key)
         ]
-        
+
         # Filter out nodes that are inactive
         if not includeDisabled:
             for node in nodes:
                 if self.getRole(node) == Roles.DISABLED:
                     nodes.remove(node)
-        
+
         return nodes
 
     def removeDevice(self, node, fullDeviceName):
@@ -1043,10 +1043,15 @@ class EtcdDeviceHistory(DeviceHistory):
         try:
             # check if the lease already exists
             self.client.get_lease_info(leaseId)
-        except Exception as PreconditionFailedError:
+        except Exception:
             # create a new lease
             expiration = leaseId - now
-            self.client.lease(ttl=expiration, lease_id=leaseId)
+            try:
+                self.client.lease(ttl=expiration, lease_id=leaseId)
+            except PreconditionFailedError:
+                # It's possible that the lease got created by a concurrent HandlerThread
+                # before we were able to create it.
+                pass
 
         serializedStatus = status.toJSON(includeClassInfo=True)
         self.client.put(latestStatusKey, serializedStatus, lease=leaseId)
@@ -1329,11 +1334,15 @@ class EtcdNodeHistory(NodeHistory):
         try:
             # check if the lease already exists
             self.client.get_lease_info(leaseId)
-        except Exception as PreconditionFailedError:
+        except Exception:
             # create a new lease
             expiration = leaseId - now
-            self.client.lease(ttl=expiration, lease_id=leaseId)
-
+            try:
+                self.client.lease(ttl=expiration, lease_id=leaseId)
+            except PreconditionFailedError:
+                # It's possible that the lease got created by a concurrent HandlerThread
+                # before we were able to create it.
+                pass
         serializedStatus = status.toJSON(includeClassInfo=True)
         self.client.put(latestStatusKey, serializedStatus, lease=leaseId)
         self.client.put(statusKey, serializedStatus, lease=leaseId)
