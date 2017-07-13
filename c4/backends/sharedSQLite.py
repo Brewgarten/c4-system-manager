@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 
-from c4.system.backend import BackendImplementation, BackendKeyValueStore
+from c4.system.backend import Backend, BackendImplementation, BackendKeyValueStore
 from c4.system.configuration import (Configuration,
                                      DeviceInfo,
                                      NodeInfo,
@@ -335,6 +335,7 @@ class SharedSqliteDBConfiguration(Configuration):
     """
     def __init__(self, database):
         self.database = database
+        self.store = Backend().keyValueStore
 
     def _getDetails(self, node, name=None):
         """
@@ -495,6 +496,20 @@ class SharedSqliteDBConfiguration(Configuration):
             ("settings", json.dumps(platform.settings)))
         self.database.write("commit")
 
+    def addRoleInfo(self, role):
+        """
+        Add a role information object with expected devices.
+
+        :param role: role
+        :type role: :class:`~c4.system.configuration.RoleInfo`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        key = "/roles/{role}".format(role=role.role.name)
+        value = serialize(role)
+        self.store.put(key, value)
+        return role
+    
     def clear(self):
         """
         Removes all nodes and devices from the configuration object and the database.
@@ -576,6 +591,22 @@ class SharedSqliteDBConfiguration(Configuration):
         if not roleName:
             return None
         return Roles.valueOf(roleName)
+
+    def changeRoleInfo(self, role, info):
+        """
+        Change the role information for a given role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :param info: roleInfo
+        :type info: :class:`~c4.system.configuration.RoleInfo`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        key = "/roles/{role}".format(role=role.name)
+        value = serialize(info)
+        self.store.put(key, value)
+        return info
 
     def changeState(self, node, name, state):
         """
@@ -719,6 +750,36 @@ class SharedSqliteDBConfiguration(Configuration):
         if name is None and "role" in details:
             del details["role"]
         return details
+
+    def getRoleInfo(self, role):
+        """
+        Get role information for the specified role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        key = "/roles/{role}".format(role=role.name)
+        value = self.store.get(key)
+        if value:
+            return deserialize(value)
+        return None
+
+    def getRoles(self):
+        """
+        Get a mapping of roles to role info objects
+
+        :returns: mappings
+        :rtype: dict
+        """
+        rolesPrefix = "/roles/"
+        
+        # note that key is the role name and value is the role info
+        return {
+            key.replace(rolesPrefix, ""): deserialize(value)
+            for key, value in self.store.getPrefix(rolesPrefix)
+        }
 
     def getTargetState(self, node, name=None):
         """
@@ -924,6 +985,16 @@ class SharedSqliteDBConfiguration(Configuration):
         if propertyName in details:
             del details[propertyName]
             self.database.writeCommit("update t_sm_configuration set details = ? where id is ?", (json.dumps(details), rowId))
+
+    def removeRoleInfo(self, role):
+        """
+        Remove role information
+
+        :param role: role
+        :type role: :class:`Roles`
+        """
+        key = "/roles/{role}".format(role=role.name)
+        self.store.delete(key)
 
     def resetDeviceStates(self):
         """

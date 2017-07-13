@@ -26,7 +26,8 @@ from c4.system import egg
 from c4.system.configuration import (ConfigurationInfo,
                                      NodeInfo,
                                      States,
-                                     Roles)
+                                     Roles,
+                                     RoleInfo)
 from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation, ConfiguredDeviceManagerImplementation
 from c4.system.messages import (DisableNode,
                                 LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
@@ -1381,6 +1382,11 @@ def main():
             return 1
 
     elif args.command == "run":
+        log.info("*****************************************************************************************")
+        log.info("*****************************************************************************************")
+        log.info("*********                  STARTING SYSTEM MANAGER                          *************")
+        log.info("*****************************************************************************************")
+        log.info("*****************************************************************************************")
 
         try:
             configuration = Backend().configuration
@@ -1396,6 +1402,8 @@ def main():
                 configuration.loadFromInfo(configInfo)
             else:
                 # else database not empty
+                
+                
                 # set all devices to REGISTERED unless their states are MAINTENTANCE or UNDEPLOYED
                 configuration.resetDeviceStates()
 
@@ -1403,6 +1411,33 @@ def main():
             if args.node not in configuration.getNodeNames():
                 log.error("Current node name '%s' not found in configuration", args.node)
                 return 1
+
+            # make sure devices match assigned role
+            else:
+                log.info("Check devices based on assigned role...")
+                # remove all devices from node, and add devices based on role
+                nodeInfo = configuration.getNode(node=args.node, includeDevices=True)                    
+                nodeRole = nodeInfo.role
+                log.info("Node '%s' has role: '%s'", args.node, nodeRole.name)
+                roleInfo = configuration.getRoleInfo(role=nodeRole)
+                if not roleInfo:
+                    log.error("The nodes assigned role '%s' not found in configuration", nodeRole)
+                
+                else:
+                    # remove any devices attached to node that are not part of the role
+                    for device in nodeInfo.devices.values():
+                        log.info("Checking device '%s' ...", device.name)
+                        if device not in roleInfo.devices.values():
+                            log.info("Removing device: %s from node %s", device.name, args.node)
+                            configuration.removeDevice(node=args.node, fullDeviceName=device.name)
+                    
+                    nodeInfo = configuration.getNode(node=args.node, includeDevices=True)
+                    # add any devices to the node that were part of the role but missing from node
+                    for device in roleInfo.devices.values():
+                        log.info("Found device in role '%s' ...", device.name)
+                        if device not in nodeInfo.devices.values():
+                            log.info("Adding device: %s to node %s", device.name, args.node)
+                            configuration.addDevice(node=args.node, fullDeviceName=device.name, device=device)
 
             clusterInfo = backend.ClusterInfo(args.node,
                                               configuration.getAddress(args.node),

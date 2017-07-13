@@ -1,6 +1,7 @@
 """
 etcd based backend implementation
 """
+import logging
 import re
 import time
 
@@ -298,6 +299,7 @@ class EtcdConfiguration(Configuration):
     PLATFORM_DESCRIPTION = "/platform/description"
     PLATFORM_SETTINGS = "/platform/settings"
     PLATFORM_TYPE = "/platform/type"
+    ROLES = "/roles"
 
     def __init__(self, client):
         self.client = client
@@ -450,6 +452,28 @@ class EtcdConfiguration(Configuration):
             transaction.put(settingKey, serialize(value))
         transaction.commit()
 
+    def addRoleInfo(self, role):
+        """
+        Add a role information object with expected devices.
+
+        :param role: role
+        :type role: :class:`~c4.system.configuration.RoleInfo`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        # check if role exists
+        roleName = role.role.name
+        roleInfo = self.getRoleInfo(role.role)
+        if roleInfo is None:
+            roleKey = "{base}/{role}".format(base=self.ROLES, role=roleName)
+            self.client.put(roleKey, serialize(role))
+        else:
+            # we are already exist
+            self.log.error("'%s' is already defined", role)
+            return None
+        
+        return role
+
     def clear(self):
         """
         Removes all nodes and devices from the configuration object and the database.
@@ -590,6 +614,48 @@ class EtcdConfiguration(Configuration):
             success=success,
             failure=failure
         )
+        if not succeeded:
+            # just set a value that did not exist so no previous value
+            return None
+
+        # get previous value from the the Get response of the transaction
+        previousValue, _ = responses[0][0]
+        return deserialize(previousValue)
+
+    def changeRoleInfo(self, role, info):
+        """
+        Change the role information for a given role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :param info: roleInfo
+        :type info: :class:`~c4.system.configuration.RoleInfo`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        key = "{base}/{role}".format(base=self.ROLES, role=role.name)
+        serializedValue = serialize(info)
+
+        # check if the key exists
+        compare = [
+            etcd3.transactions.Version(key) > 0
+        ]
+        # get previous value and set new value
+        success = [
+            etcd3.transactions.Get(key),
+            etcd3.transactions.Put(key, serializedValue)
+        ]
+        # just set the new value
+        failure = [
+            etcd3.transactions.Put(key, serializedValue)
+        ]
+
+        succeeded, responses = self.client.transaction(
+            compare=compare,
+            success=success,
+            failure=failure
+        )
+        
         if not succeeded:
             # just set a value that did not exist so no previous value
             return None
@@ -772,6 +838,35 @@ class EtcdConfiguration(Configuration):
             return None
         return deserialize(value)
 
+    def getRoleInfo(self, role):
+        """
+        Get role information for the specified role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+        key = "{base}/{role}".format(base=self.ROLES, role=role.name)
+        value, _ = self.client.get(key)
+        if value is None:
+            return None
+        return deserialize(value)
+
+    def getRoles(self):
+        """
+        Get a mapping of roles to role info objects
+
+        :returns: mappings
+        :rtype: dict
+        """
+        rolesPrefix = self.ROLES + "/"
+        # note that key is the role name and value is the role info
+        return {
+            metadata.key.replace(rolesPrefix, ""): deserialize(value)
+            for value, metadata in self.client.get_prefix(rolesPrefix)
+        }     
+
     def getState(self, node, name=None):
         """
         Get the state of a system or device manager.
@@ -953,6 +1048,29 @@ class EtcdConfiguration(Configuration):
         """
         key = self.getKey(node, name, "properties", propertyName)
 
+        # check if the key exists
+        compare = [
+            etcd3.transactions.Version(key) > 0
+        ]
+        # remove value
+        success = [
+            etcd3.transactions.Delete(key)
+        ]
+
+        self.client.transaction(
+            compare=compare,
+            success=success,
+            failure=[]
+        )
+
+    def removeRoleInfo(self, role):
+        """
+        Remove role information
+
+        :param role: role
+        :type role: :class:`Roles`
+        """
+        key = "{base}/{role}".format(base=self.ROLES, role=role.name)
         # check if the key exists
         compare = [
             etcd3.transactions.Version(key) > 0

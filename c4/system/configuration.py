@@ -6,7 +6,7 @@ import multiprocessing
 from c4.utils.enum import Enum
 from c4.utils.jsonutil import JSONSerializable
 from c4.utils.logutil import ClassLogger
-
+from c4.utils.util import naturalSortKey
 from c4.system.backend import Backend
 
 
@@ -103,6 +103,33 @@ class Configuration(object):
         """
 
     @abstractmethod
+    def addRoleInfo(self, role):
+        """
+        Add role information
+
+        :param role: role
+        :type role: :class:`~c4.system.configuration.RoleInfo`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+
+    def addRoleInfoDevice(self, role, device):
+        """
+        Add device to role information
+
+        :param role: role
+        :type role: :class:`roles`
+        :param device: device
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
+        """
+        roleInfo = self.getRoleInfo(role)
+        if not roleInfo:
+            self.log.error("Unable to add device because %s role does not exist", role.NAME)
+            return
+        roleInfo.devices[device.name] = device
+        self.changeRoleInfo(role=role, info=roleInfo)
+
+    @abstractmethod
     def clear(self):
         """
         Removes all nodes and devices from the configuration object and the database.
@@ -144,10 +171,23 @@ class Configuration(object):
 
         :param node: node
         :type node: str
-        :param state: role
-        :type state: :class:`Roles`
+        :param role: role
+        :type role: :class:`Roles`
         :returns: previous role
         :rtype: :class:`Roles`
+        """
+
+    @abstractmethod
+    def changeRoleInfo(self, role, info):
+        """
+        Change role of a system manager
+
+        :param role: role
+        :type role: :class:`Roles`
+        :param info: role
+        :type info: :class:`~c4.system.configuration.RoleInfo`
+        :returns: previous role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
         """
 
     @abstractmethod
@@ -278,10 +318,44 @@ class Configuration(object):
         """
 
     @abstractmethod
-    def getNodeNames(self):
+    def getNodeNames(self, includeDisabled=False):
         """
         Return a list of node names.
+        
+        :param includeDisabled: Include nodes with Roles.DISABLED?
+        :type includeDisabled: boolean
+        :returns: list of node names
+        :rtype: list
         """
+
+    def getNodeNamesByRole(self, role, isSorted=True):
+        """
+        Return a list of node names.
+
+        :param role: role
+        :type role: :class:`Roles`
+        :param isSorted: return list as a natural sorted list of node names? (default=True)
+        :type isSorted: boolean 
+        :returns: list of node names
+        :rtype: list
+        """
+        # Unless looking for the disabled node pre-filter those out
+        if role == Roles.DISABLED:
+            nodes = self.getNodeNames(includeDisabled=True)
+        else:
+            nodes = self.getNodeNames()
+
+        # Filter out nodes that don't match the role
+        for node in nodes:
+            if self.getRole(node) != role:
+                nodes.remove(node)
+        
+        # Apply natural sort order
+        if isSorted:
+            nodes = sorted(nodes, key=lambda nodeName: naturalSortKey(nodeName))
+        
+        return nodes
+        
 
     @abstractmethod
     def getPlatform(self):
@@ -334,6 +408,41 @@ class Configuration(object):
             self.log.error("could not get role because '%s' does not exist", node)
             return None
         return info.role
+
+    @abstractmethod
+    def getRoleInfo(self, role):
+        """
+        Get role information for the specified role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :returns: role info
+        :rtype: :class:`~c4.system.configuration.RoleInfo`
+        """
+
+    def getRoleInfoDevices(self, role):
+        """
+        Get role information for the specified role
+
+        :param role: role
+        :type role: :class:`Roles`
+        :returns: device infos
+        :rtype: dict
+        """
+        roleInfo = self.getRoleInfo(role)
+        if roleInfo is None:
+            self.log.error("could not get device list because role '%s' does not exist", role)
+            return {}
+        return roleInfo.devices
+        
+    @abstractmethod
+    def getRoles(self):
+        """
+        Get a mapping of roles to role info objects
+
+        :returns: mappings
+        :rtype: dict
+        """
 
     def getState(self, node, name=None):
         """
@@ -388,6 +497,8 @@ class Configuration(object):
             self.addNode(node)
         for alias, nodeName in configurationInfo.aliases.items():
             self.addAlias(alias, nodeName)
+        for rInfo in configurationInfo.roles.values():
+            self.addRoleInfo(rInfo)
         self.addPlatform(configurationInfo.platform)
 
     @abstractmethod
@@ -422,6 +533,31 @@ class Configuration(object):
         :param property: property
         :type property: str
         """
+
+    @abstractmethod
+    def removeRoleInfo(self, role):
+        """
+        Remove role information
+
+        :param role: role
+        :type role: :class:`Roles`
+        """
+
+    def RemoveRoleInfoDevice(self, role, device):
+        """
+        Remove device from role information
+
+        :param role: role
+        :type role: :class:`roles`
+        :param device: device
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
+        """
+        roleInfo = self.getRoleInfo(role)
+        if not roleInfo:
+            self.log.error("Unable to remove device because %s role does not exist", role.NAME)
+            return
+        roleInfo.devices.pop(device.name, None)
+        self.changeRoleInfo(role=role, info=roleInfo)
 
     def removeTargetState(self, node, name=None):
         """
@@ -464,6 +600,7 @@ class Configuration(object):
         for nodeName in self.getNodeNames():
             configurationInfo.nodes[nodeName] = self.getNode(nodeName)
         configurationInfo.platform = self.getPlatform()
+        configurationInfo.roles = self.getRoles()
         return configurationInfo
 
 class ConfigurationInfo(JSONSerializable):
@@ -474,6 +611,7 @@ class ConfigurationInfo(JSONSerializable):
         self.aliases = {}
         self.nodes = {}
         self.platform = PlatformInfo()
+        self.roles = {}
 
     def validate(self):
         """
@@ -694,6 +832,20 @@ class DeviceManagerConfiguration(JSONSerializable):
         self.alwaysOn = alwaysOn
         self.rc = rc
 
+    def __eq__(self, other):
+        if (isinstance(other, DeviceManagerConfiguration)
+                and self.startCommand == other.startCommand
+                and self.statusCommand == other.statusCommand
+                and self.stopCommand == other.stopCommand
+                and self.statusRegex == other.statusRegex
+                and self.alwaysOn == other.alwaysOn
+                and self.rc == other.rc):
+            return True
+        return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
 class DeviceInfo(JSONSerializable):
     """
     Device manager information
@@ -717,7 +869,6 @@ class DeviceInfo(JSONSerializable):
                 and self.devices == other.devices
                 and self.properties == other.properties
                 and self.name == other.name
-                and self.state == other.state
                 and self.type == other.type):
             return True
         return False
@@ -814,6 +965,47 @@ class NodeInfo(JSONSerializable):
         # remove empty properties
         if not serializableDict["properties"]:
             del serializableDict["properties"]
+        if not serializableDict["devices"]:
+            del serializableDict["devices"]
+        return serializableDict
+
+class RoleInfo(JSONSerializable):
+    """
+    Role information
+
+    :param role: role
+    :type role: :class:`~c4.system.configuration.Roles`
+    """
+    def __init__(self, role=Roles.DISABLED):
+        self.role = role or Roles.DISABLED
+        self.devices = {}
+
+    def __eq__(self, other):
+        if (isinstance(other, RoleInfo)
+                and self.role == other.role
+                and self.devices == other.devices):
+            return True
+        return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def addDevice(self, device):
+        """
+        Add device to the role
+
+        :param device: device
+        :type device: :class:`~c4.system.configuration.DeviceInfo`
+        :returns: :class:`~c4.system.configuration.RoleInfo`
+        """
+        if device.name in self.devices:
+            log.error("'%s' already part of '%s'", device.name, self.name)
+        else:
+            self.devices[device.name] = device
+        return self
+
+    def toJSONSerializable(self, includeClassInfo=False):
+        serializableDict = super(RoleInfo, self).toJSONSerializable(includeClassInfo=includeClassInfo)
         if not serializableDict["devices"]:
             del serializableDict["devices"]
         return serializableDict
