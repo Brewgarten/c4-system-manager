@@ -1304,9 +1304,15 @@ class EtcdKeyValueStore(BackendKeyValueStore):
 
     :param client: etcd client
     :type client: :class:`~etcd3.Etcd3Client`
+    :param defaultLeaseTimeWindow: default lease time window (in seconds)
+    :type defaultLeaseTimeWindow: int
+    :param defaultTimeToLive: default time to live (in seconds)
+    :type defaultTimeToLive: int
     """
-    def __init__(self, client):
+    def __init__(self, client, defaultLeaseTimeWindow=60, defaultTimeToLive=None):
         self.client = client
+        self.defaultLeaseTimeWindow = defaultLeaseTimeWindow
+        self.defaultTimeToLive = defaultTimeToLive
 
     def delete(self, key):
         """
@@ -1384,7 +1390,7 @@ class EtcdKeyValueStore(BackendKeyValueStore):
             self.log.error(exception)
         return []
 
-    def put(self, key, value):
+    def put(self, key, value, ttl=None):
         """
         Put value at specified key
 
@@ -1392,9 +1398,32 @@ class EtcdKeyValueStore(BackendKeyValueStore):
         :type key: str
         :param value: value
         :type value: str
+        :param ttl: time to live (in seconds), infinite by default
+        :type ttl: int
         """
         try:
-            self.client.put(key, value)
+            leaseId = None
+            if ttl is None:
+                ttl = self.defaultTimeToLive
+
+            if ttl is not None:
+                # calculate lease id based on time to live and lease interval time window
+                now = int(time.time())
+                leaseId = now + ttl + self.defaultLeaseTimeWindow - now % self.defaultLeaseTimeWindow
+
+                try:
+                    # check if the lease already exists
+                    self.client.get_lease_info(leaseId)
+                except Exception as PreconditionFailedError:
+                    # create a new lease
+                    expiration = leaseId - now
+                    try:
+                        self.client.lease(ttl=expiration, lease_id=leaseId)
+                    except PreconditionFailedError:
+                        # it is possible that the lease was created by a concurrent thread
+                        pass
+
+            self.client.put(key, value, lease=leaseId)
         except Exception as exception:
             self.log.error(exception)
 
