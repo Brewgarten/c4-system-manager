@@ -54,6 +54,7 @@ from c4.utils.command import run
 from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import callWithVariableArguments, getVariableArguments
+from c4.system.monitoring import ClassMonitor
 
 
 log = logging.getLogger(__name__)
@@ -373,6 +374,7 @@ class DeviceManagerImplementation(object):
             self.log.error("'%s' does not match enum of type '%s'", state, States)
 
 @ClassLogger
+@ClassMonitor
 class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
     """
     Device manager implementation for services with a specified DeviceManagerConfiguration
@@ -384,6 +386,8 @@ class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
         else:
             raise ValueError("No DeviceManagerConfiguration found in properties.")
         self.statusWarningIssued = False
+        # Override the default event (class name) with the name of the managed device.
+        self.monitor.event = name
 
     def handleLocalStartDeviceManager(self, message, envelope):
         """
@@ -431,18 +435,24 @@ class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
         return ConfiguredDeviceManagerStatus(self.state, status)
 
     @operation
-    def start(self):
+    def start(self, isRecovery=False):
         """
         Start the configured service.
         """
         if self.state == States.STARTING:
             self.log.debug("%s received start request, but state is already STARTING.", self.name)
             return
-        self.state = States.STARTING
-        stdout, stderr, rc = run(self.dmConfiguration.startCommand)
-        if rc != 0:
-            self.log.error("Error starting {0} service. stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
-        self.state = States.RUNNING
+        # Make sure we didn't already recover to OK status
+        if self.handleStatus().status != ConfiguredDeviceManagerStatus.OK:
+            self.state = States.STARTING
+            stdout, stderr, rc = run(self.dmConfiguration.startCommand)
+            if rc != 0:
+                self.log.error("Error starting {0} service. stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
+
+            if isRecovery:
+                self.monitor.report(self.monitor.SUCCESS if rc ==0 else self.monitor.FAILURE)
+
+            self.state = States.RUNNING
 
     @operation
     def stop(self):

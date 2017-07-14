@@ -1,4 +1,5 @@
 import logging
+import time
 
 from c4.system.backend import Backend
 from c4.system.client import Client
@@ -11,6 +12,9 @@ class TestClient(object):
     def test_infoDeviceManager(self, system):
 
         assert system["rack1-master1"].start()
+
+        # Give async message handlers a chance to complete.
+        time.sleep(2)
 
         client = Client("rack1-master1")
 
