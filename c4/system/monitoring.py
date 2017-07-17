@@ -215,7 +215,6 @@ class EtcdBackend(MonitorBackend):
     """
     def __init__(self):
         super(EtcdBackend, self).__init__(False)
-        self.store = Backend().keyValueStore
 
     def reportEvent(self, eventName, eventStatus, otherInfo):
         """
@@ -229,7 +228,7 @@ class EtcdBackend(MonitorBackend):
         """
         status = MonitoringStatus(eventName, eventStatus, otherInfo)
         eventKey = "/".join(["/monitoring", status.timestamp.toISOFormattedString()])
-        self.store.put(eventKey, status.toJSON(includeClassInfo=True))
+        Backend().keyValueStore.put(eventKey, status.toJSON(includeClassInfo=True))
 
     def queryEvents(self, eventName=None, startTime=None):
         """
@@ -253,7 +252,7 @@ class EtcdBackend(MonitorBackend):
         :rtype: Dictionary
         """
         datetimeFormat = "%Y-%m-%d %H:%M:%S"
-        pairs = self.store.getPrefix("/monitoring")
+        pairs = Backend().keyValueStore.getPrefix("/monitoring")
         if startTime:
             try:
                 startDateTime = datetime.strptime(startTime, datetimeFormat).isoformat("T")
