@@ -777,14 +777,22 @@ class SystemManagerImplementation(object):
             configuration.addNode(envelope.Message["node"])
             self.log.debug("%s added to the configuration",node)
 
+        state = configuration.getState(node)
+        if state == States.REGISTERING:
+            configuration.changeState(node, None, States.REGISTERED)
+            response = {
+                "role": configuration.getRole(node),
+                "state": States.REGISTERED
+                }
+        else:
+            response = {
+                "error": "Received node registration message, but current state is {}.".format(state)
+                }
         # start node
         self.client.forwardMessage(StartNode(node))
 
         # send registration response
-        return {
-            "role": configuration.getRole(node),
-            "state": States.REGISTERED
-        }
+        return response
 
     def handleRegistrationNotificationResponse(self, message):
         """
@@ -793,17 +801,11 @@ class SystemManagerImplementation(object):
         :param message: message
         :type message: dict
         """
-        if self.clusterInfo.state == States.REGISTERING:
-            self.clusterInfo.state = States.REGISTERED
-            self.clusterInfo.role = message.get("role", Roles.THIN)
-            self.log.debug("'%s' is now registered with role '%s'", self.node, self.clusterInfo.role.name)
-        elif self.clusterInfo.state == States.STARTING or self.clusterInfo.state == States.RUNNING:
-            # we implicitly know that the active system manager must have registered because it sent
-            # a start message
+        if message.get("state", None) == States.REGISTERED:
             self.clusterInfo.role = message.get("role", Roles.THIN)
             self.log.debug("'%s' is now registered with role '%s'", self.node, self.clusterInfo.role.name)
         else:
-            self.log.error("Received register node acknowlegdment but current state is '%s'", self.clusterInfo.state)
+            self.log.error(message["error"])
 
     def handleStartDeviceManagers(self, message, envelope):
         """
@@ -1402,8 +1404,8 @@ def main():
                 configuration.loadFromInfo(configInfo)
             else:
                 # else database not empty
-                
-                
+
+
                 # set all devices to REGISTERED unless their states are MAINTENTANCE or UNDEPLOYED
                 configuration.resetDeviceStates()
 
@@ -1416,13 +1418,13 @@ def main():
             else:
                 log.info("Check devices based on assigned role...")
                 # remove all devices from node, and add devices based on role
-                nodeInfo = configuration.getNode(node=args.node, includeDevices=True)                    
+                nodeInfo = configuration.getNode(node=args.node, includeDevices=True)
                 nodeRole = nodeInfo.role
                 log.info("Node '%s' has role: '%s'", args.node, nodeRole.name)
                 roleInfo = configuration.getRoleInfo(role=nodeRole)
                 if not roleInfo:
                     log.error("The nodes assigned role '%s' not found in configuration", nodeRole)
-                
+
                 else:
                     # remove any devices attached to node that are not part of the role
                     for device in nodeInfo.devices.values():
@@ -1430,7 +1432,7 @@ def main():
                         if device not in roleInfo.devices.values():
                             log.info("Removing device: %s from node %s", device.name, args.node)
                             configuration.removeDevice(node=args.node, fullDeviceName=device.name)
-                    
+
                     nodeInfo = configuration.getNode(node=args.node, includeDevices=True)
                     # add any devices to the node that were part of the role but missing from node
                     for device in roleInfo.devices.values():
