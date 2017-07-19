@@ -127,6 +127,16 @@ class Operation(Envelope):
         if keywordArguments:
             self.Message["keywordArguments"] = keywordArguments
 
+class RefreshDevices(Envelope):
+    """
+    A message from the active system manager to a system manager to refresh attached devices
+
+    :param To: system manager node
+    :type To: str
+    """
+    def __init__(self, To):
+        super(RefreshDevices, self).__init__('system-manager', To)
+
 class RegisterDeviceManager(Envelope):
     """
     A message from the active system manager to a thin system manager to add device(s)
@@ -152,6 +162,17 @@ class RegistrationNotification(Envelope):
     """
     def __init__(self, From):
         super(RegistrationNotification, self).__init__(From, "system-manager")
+
+class RemoveDeviceManagers(Envelope):
+    """
+    A message sent from a system manager to remove some of its device managers.
+
+    :param To: node address
+    :type To: str
+    """
+    def __init__(self, To):
+        super(RemoveDeviceManagers, self).__init__("system-manager", To)
+        self.Message["devices"] = {}
 
 class StartDeviceManagers(Envelope):
     """

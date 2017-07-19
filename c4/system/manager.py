@@ -28,18 +28,23 @@ from c4.system.configuration import (ConfigurationInfo,
                                      States,
                                      Roles,
                                      RoleInfo)
-from c4.system.deviceManager import DeviceManager, DeviceManagerImplementation, ConfiguredDeviceManagerImplementation
+from c4.system.deviceManager import (DeviceManager, 
+                                     DeviceManagerImplementation, 
+                                     ConfiguredDeviceManagerImplementation)
 from c4.system.messages import (DisableNode,
-                                LocalStartDeviceManager, LocalStopDeviceManager, LocalStopNode,
+                                LocalStartDeviceManager, 
+                                LocalStopDeviceManager, 
+                                LocalStopNode,
                                 RegistrationNotification,
-                                StartDeviceManagers, StartNode, StopNode)
+                                RemoveDeviceManagers, 
+                                StartDeviceManagers, 
+                                StartNode,
+                                StopNode)
 from c4.utils.jsonutil import JSONSerializable, Datetime
 from c4.utils.logutil import ClassLogger
 from c4.utils.util import getFullModuleName, getModuleClasses
 import platform as platformSpec
 from c4.system.backend import Backend, BackendInfo
-
-
 
 log = logging.getLogger(__name__)
 
@@ -593,7 +598,7 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
-        (node, device_name) = self.parseFrom(envelope.From)
+        (_, device_name) = self.parseFrom(envelope.From)
 
         # get device manager sub process
         deviceManager = self.deviceManagers.get(envelope.From)
@@ -628,10 +633,12 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         # send stop to all device managers if we have any running
+        self.log.debug("received local stop node message")
         deviceManagers = self.deviceManagers
         if deviceManagers:
             self.messageTracker.add(envelope)
             for deviceManagerAddress in deviceManagers.keys():
+                self.log.debug("sending LocalStopDeviceManager to '%s'", deviceManagerAddress)
                 stopEnvelope = LocalStopDeviceManager(self.node, deviceManagerAddress)
                 self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
                 self.client.forwardMessage(stopEnvelope)
@@ -807,6 +814,123 @@ class SystemManagerImplementation(object):
         else:
             self.log.error(message["error"])
 
+    def handleRefreshDevices(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.RefreshDevices` messages
+
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        self.log.debug("*****************************************************************************************")
+        self.log.debug("Received refresh devices message")
+        self.log.debug("*****************************************************************************************")
+        if self.clusterInfo.state == States.RUNNING:
+            extraDevices = {}
+            self.log.debug("Check devices based on assigned role...")
+            # remove all devices from node, and add devices based on role
+            configuration = Backend().configuration
+            nodeInfo = configuration.getNode(node=self.node, includeDevices=True)                    
+            nodeRole = nodeInfo.role
+            self.log.debug("Node '%s' has role: '%s'", self.node, nodeRole.name)
+            roleInfo = configuration.getRoleInfo(role=nodeRole)
+            if not roleInfo:
+                self.log.error("The nodes assigned role '%s' not found in configuration", nodeRole)
+            
+            else:
+                # remove any devices attached to node that are not part of the role
+                for device in nodeInfo.devices.values():
+                    self.log.debug("Checking device '%s' ...", device.name)
+                    if device not in roleInfo.devices.values():
+                        #TODO: add a platform setting to make this check configurable
+                        if device.type == 'c4.devices.policyengine.PolicyEngineManager':
+                            self.log.debug("Ignoring policy engine")
+                        else:
+                            self.log.debug("Removing device: %s from node %s", device.name, self.node)
+                            extraDevices[device.name]=device
+
+                self.log.debug("Extra devices: %s", str(extraDevices))
+                if extraDevices:
+                    self.messageTracker.add(envelope)
+                    removeEnvelope = RemoveDeviceManagers(envelope.To)
+                    removeEnvelope.Message["devices"] = extraDevices
+                    self.messageTracker.addRelatedMessage(envelope.MessageID, removeEnvelope.MessageID)
+                    self.client.forwardMessage(removeEnvelope)
+                
+                def loadMessageWithRegisteredDevices(node_name, message, parent_prefix, node_or_device):
+                    for name, deviceInfo in node_or_device.devices.iteritems():
+                        # full_name is the full dotted name, but without the host
+                        # e.g. db2.instance1.mln1
+                        full_name = parent_prefix + name
+                        if deviceInfo.state == States.REGISTERED:
+                            configuration.changeState(node_name, full_name, States.STARTING)
+                            message["devices"][full_name] = deviceInfo
+                        loadMessageWithRegisteredDevices(node_name, message, full_name + ".", deviceInfo)
+                
+                nodeInfo = configuration.getNode(node=self.node, includeDevices=True)
+                # add any devices to the node that were part of the role but missing from node
+                for device in roleInfo.devices.values():
+                    self.log.debug("Found device in role '%s' ...", device.name)
+                    if device not in nodeInfo.devices.values():
+                        #TODO: add a platform setting to make this check configurable
+                        if device.type == 'c4.devices.policyengine.PolicyEngineManager':
+                            self.log.debug("Ignoring policy engine")
+                        else:
+                            self.log.debug("Adding device: %s to node %s", device.name, self.node)
+                            configuration.addDevice(node=self.node, fullDeviceName=device.name, device=device)
+
+                startEnvelope = StartDeviceManagers(envelope.To)
+                configurationInfo = configuration.toInfo()
+                for node_name, a_node in configurationInfo.nodes.iteritems():
+                    if envelope.To == node_name:
+                        loadMessageWithRegisteredDevices(node_name, startEnvelope.Message, "", a_node)
+                self.log.debug("Sending message to %s to start all REGISTERED devices: %s", envelope.To, startEnvelope.Message)
+                self.client.forwardMessage(startEnvelope)        
+        else:
+            self.log.error("Received refresh devices message but current state is '{0}'".format(self.clusterInfo.state))
+
+    def handleRemoveDeviceManagers(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.RemoveDeviceManagers` messages
+
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        self.log.debug("Received remove device managers request for %s from %s", message, envelope.From)
+
+        self.messageTracker.add(envelope)
+        for deviceManager in message["devices"].keys():
+            self.log.debug("Sending stop to %s/%s", self.node, deviceManager)
+            stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
+            self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
+            self.client.forwardMessage(stopEnvelope)
+
+    def handleRemoveDeviceManagersResponse(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.RemoveDeviceManager` response messages
+
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        self.log.debug("Received remove device manager acknowledgement from '%s'", envelope.From)
+        (node, _) = self.parseFrom(envelope.From)
+        configuration = Backend().configuration
+        for device in message["devices"].keys():
+            self.log.debug("Removing device '%s' from node '%s'", device, node)
+            configuration.removeDevice(node, fullDeviceName=device)
+
+        original_message_id = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
+
+        if not self.messageTracker.hasMoreRelatedMessages(original_message_id):
+            original_message = self.messageTracker.remove(original_message_id)
+            if original_message is not None:
+                self.client.forwardMessage(original_message)
+
     def handleStartDeviceManagers(self, message, envelope):
         """
         Handle :class:`~c4.system.messages.StartDeviceManagers` messages
@@ -841,7 +965,7 @@ class SystemManagerImplementation(object):
                 if storedMessageEnvelope is not None:
                     self.client.forwardMessage(storedMessageEnvelope)
         else:
-            response["error"] = "Received start message but current role is '{0}'".format(self.clusterInfo.role)
+            response["error"] = "Received start message but current state is '{0}'".format(self.clusterInfo.state)
             self.log.error(response["error"])
             return response
 
@@ -1005,7 +1129,6 @@ class SystemManagerImplementation(object):
 
         self.messageTracker.add(envelope)
         for deviceManager in message["devices"]:
-
             self.log.debug("Sending stop to %s/%s", self.node, deviceManager)
             stopEnvelope = LocalStopDeviceManager(self.node, "{0}/{1}".format(self.node, deviceManager))
             self.messageTracker.addRelatedMessage(envelope.MessageID, stopEnvelope.MessageID)
@@ -1021,7 +1144,7 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
-        (node, device_name) = self.parseFrom(envelope.From)
+        (node, _) = self.parseFrom(envelope.From)
         configuration = Backend().configuration
         for device in message["devices"]:
             self.log.debug("Changing %s/%s state from RUNNING to REGISTERED.", node, device)
@@ -1043,7 +1166,7 @@ class SystemManagerImplementation(object):
         :param envelope: envelope
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
-        self.log.debug("Received stop node message. terminate: %s", envelope.terminate)
+        self.log.info("Received stop node message. terminate: %s", envelope.terminate)
 
         if envelope.terminate:
             for process in self.deviceManagers.values():
@@ -1116,6 +1239,19 @@ class SystemManagerImplementation(object):
         else:
             self.log.error("Received stop node acknowlegdment from '%s' but current role is '%s'",
                            envelope.From, self.clusterInfo.role)
+
+    def handleSystemManagerUpdate(self, message, envelope):
+        """
+        Handle :class:`~c4.system.messages.SystemManagerUpdate` messages
+
+        :param message: message
+        :type message: dict
+        :param envelope: envelope
+        :type envelope: :class:`~c4.system.messages.Envelope`
+        """
+        self.log.debug("Received an system manager update message")
+        self.clusterInfo.refresh()
+        self.log.debug(self.clusterInfo.aliases)
 
     def handleUndeployDeviceManager(self, message, envelope):
         """
@@ -1237,6 +1373,7 @@ class SystemManagerImplementation(object):
             if deviceInfo.type in deviceManagerImplementationMap:
                 try:
                     # create a new device manager instance
+                    self.log.debug("starting device: '%s' on '%s'", fullDeviceName, self.node)
                     deviceManager = DeviceManager(self.clusterInfo,
                                                   fullDeviceName,
                                                   deviceManagerImplementationMap[deviceInfo.type],

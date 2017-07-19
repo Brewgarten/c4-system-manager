@@ -926,6 +926,13 @@ class SharedSqliteDBConfiguration(Configuration):
             where parent_id is null""")
         return [row["name"] for row in rows]
 
+    def refresh(self):
+        """
+        Refresh information from backend
+        """
+        #FIXME: not implemented, used to refresh cached values for etcd        
+        pass
+
     def removeDevice(self, node, fullDeviceName):
         """
         Remove a device from the configuration

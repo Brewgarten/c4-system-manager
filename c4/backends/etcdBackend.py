@@ -249,6 +249,17 @@ class EtcdClusterInfo(object):
         """
         return self._nodes.keys()
 
+    def refresh(self):
+        """
+        Refresh information from backend
+        """
+        configuration = self.backend.configuration
+        for alias, node in configuration.getAliases().iteritems():
+            self._aliases[alias] = node
+        for nodeName in configuration.getNodeNames():
+            nodeInfo = configuration.getNode(nodeName, includeDevices=False)
+            self._nodes[nodeInfo.name] = nodeInfo.address
+
     @property
     def role(self):
         """
