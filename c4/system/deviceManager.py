@@ -427,7 +427,8 @@ class ConfiguredDeviceManagerImplementation(DeviceManagerImplementation):
             status = ConfiguredDeviceManagerStatus.OK if rc == self.dmConfiguration.rc else ConfiguredDeviceManagerStatus.FAILED
 
         if status == ConfiguredDeviceManagerStatus.FAILED:
-            if not self.statusWarningIssued:
+            # Suppress the warning if 1) we aren't running or 2) we already issued the warning once
+            if self.state == States.RUNNING and not self.statusWarningIssued:
                 self.log.warning("Unexpected %s status: stdout: %s, stderr: %s, rc: %s", self.name, stdout, stderr, rc)
                 self.statusWarningIssued = True
         else:
