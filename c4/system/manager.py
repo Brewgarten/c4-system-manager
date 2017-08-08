@@ -1529,6 +1529,9 @@ def main():
 
         try:
             configuration = Backend().configuration
+            backend = Backend()
+            backend.deviceHistory.remove(node=args.node)
+            backend.nodeHistory.remove(node=args.node)
             if not configuration.getNodeNames() or args.force:
                 # if database is empty, then load from config file
                 if not args.config:
