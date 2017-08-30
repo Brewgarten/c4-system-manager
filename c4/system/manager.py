@@ -28,16 +28,16 @@ from c4.system.configuration import (ConfigurationInfo,
                                      States,
                                      Roles,
                                      RoleInfo)
-from c4.system.deviceManager import (DeviceManager, 
-                                     DeviceManagerImplementation, 
+from c4.system.deviceManager import (DeviceManager,
+                                     DeviceManagerImplementation,
                                      ConfiguredDeviceManagerImplementation)
 from c4.system.messages import (DisableNode,
-                                LocalStartDeviceManager, 
-                                LocalStopDeviceManager, 
+                                LocalStartDeviceManager,
+                                LocalStopDeviceManager,
                                 LocalStopNode,
                                 RegistrationNotification,
-                                RemoveDeviceManagers, 
-                                StartDeviceManagers, 
+                                RemoveDeviceManagers,
+                                StartDeviceManagers,
                                 StartNode,
                                 StopNode)
 from c4.utils.jsonutil import JSONSerializable, Datetime
@@ -831,13 +831,13 @@ class SystemManagerImplementation(object):
             self.log.debug("Check devices based on assigned role...")
             # remove all devices from node, and add devices based on role
             configuration = Backend().configuration
-            nodeInfo = configuration.getNode(node=self.node, includeDevices=True)                    
+            nodeInfo = configuration.getNode(node=self.node, includeDevices=True)
             nodeRole = nodeInfo.role
             self.log.debug("Node '%s' has role: '%s'", self.node, nodeRole.name)
             roleInfo = configuration.getRoleInfo(role=nodeRole)
             if not roleInfo:
                 self.log.error("The nodes assigned role '%s' not found in configuration", nodeRole)
-            
+
             else:
                 # remove any devices attached to node that are not part of the role
                 for device in nodeInfo.devices.values():
@@ -857,7 +857,7 @@ class SystemManagerImplementation(object):
                     removeEnvelope.Message["devices"] = extraDevices
                     self.messageTracker.addRelatedMessage(envelope.MessageID, removeEnvelope.MessageID)
                     self.client.forwardMessage(removeEnvelope)
-                
+
                 def loadMessageWithRegisteredDevices(node_name, message, parent_prefix, node_or_device):
                     for name, deviceInfo in node_or_device.devices.iteritems():
                         # full_name is the full dotted name, but without the host
@@ -867,7 +867,7 @@ class SystemManagerImplementation(object):
                             configuration.changeState(node_name, full_name, States.STARTING)
                             message["devices"][full_name] = deviceInfo
                         loadMessageWithRegisteredDevices(node_name, message, full_name + ".", deviceInfo)
-                
+
                 nodeInfo = configuration.getNode(node=self.node, includeDevices=True)
                 # add any devices to the node that were part of the role but missing from node
                 for device in roleInfo.devices.values():
@@ -886,7 +886,7 @@ class SystemManagerImplementation(object):
                     if envelope.To == node_name:
                         loadMessageWithRegisteredDevices(node_name, startEnvelope.Message, "", a_node)
                 self.log.debug("Sending message to %s to start all REGISTERED devices: %s", envelope.To, startEnvelope.Message)
-                self.client.forwardMessage(startEnvelope)        
+                self.client.forwardMessage(startEnvelope)
         else:
             self.log.error("Received refresh devices message but current state is '{0}'".format(self.clusterInfo.state))
 
@@ -1445,7 +1445,7 @@ def main():
     parentParser.add_argument("-l", "--logging-config", action="store", default=pkg_resources.resource_filename("c4.data", "config/c4_logging_config.json"), help="Backend configuration file")
     parentParser.add_argument("-n", "--node", action="store", default=currentNodeName, help="Node name for this system manager")
     parentParser.add_argument("-p", "--port", action="store", dest="node_port", type=int, default=5000, help="Port for this system manager")
-    parentParser.add_argument("-v", "--verbose", action="count", default=0, help="Displays more log information")
+    parentParser.add_argument("-v", "--verbose", action="store_true", default=0, help="Displays more log information")
 
     commandParser = parser.add_subparsers(dest="command")
 
@@ -1472,6 +1472,11 @@ def main():
         configDict = json.load(logConfigFile)
         logging.config.dictConfig(configDict)
 
+    if args.verbose:
+        for handler in logging.root.handlers:
+            if handler.get_name() == "file":
+                handler.setLevel(logging.DEBUG)
+                break
     # check for backend
     exampleProperties = {
         "path.database": "/dev/shm",
