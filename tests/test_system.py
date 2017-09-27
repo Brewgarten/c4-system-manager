@@ -45,6 +45,8 @@ def test_system(system):
     assert system["rack1-master2"].start()
     assert system["rack1-master3"].start()
 
+    time.sleep(2)
+
     for node in system.keys():
         nodeInfo = configuration.getNode(node, flatDeviceHierarchy=True)
         assert nodeInfo.state == States.RUNNING

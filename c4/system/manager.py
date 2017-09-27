@@ -575,6 +575,10 @@ class SystemManagerImplementation(object):
         self.log.debug("Received start acknowledgement from '%s'", envelope.From)
         (node, device_name) = self.parseFrom(envelope.From)
 
+        configuration = Backend().configuration
+        if message.get("state", None) and isinstance(message.get("state", None), States):
+            configuration.changeState(node, device_name, States.RUNNING)
+
         # remove response from the related messages list
         storedMessageId = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
 
@@ -980,18 +984,17 @@ class SystemManagerImplementation(object):
         """
         if self.clusterInfo.role == Roles.ACTIVE:
             self.log.debug("Received start acknowlegdment from '%s': %s", envelope.From, message)
-            (node_name, component_name) = self.parseFrom(envelope.From)
+            (node_name, _) = self.parseFrom(envelope.From)
             if "devices" in message:
 
                 configuration = Backend().configuration
-                # change state of the device manager in the configuration to running
+                # change state of the device manager in the configuration to registered in the error case
                 for name, info in message["devices"].items():
-                    if "state" in info and isinstance(info["state"], States):
-                        configuration.changeState(node_name, name, States.RUNNING)
-                    elif "error" in info:
+                    if "error" in info:
                         configuration.changeState(node_name, name, States.REGISTERED)
                         self.log.error(info["error"])
             else:
+
                 self.log.error("Unsupported start acknowlegdment for %s", message)
         else:
             self.log.error("Received start acknowlegdment from '%s' but current role is '%s'",
