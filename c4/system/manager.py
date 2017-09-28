@@ -95,7 +95,7 @@ class SystemManager(PeerRouter):
         :returns: whether start was successful
         :rtype: bool
         """
-        self.log.info("Starting system mananager '%s'", self.address)
+        self.log.info("Starting system manager '%s'", self.address)
         started = super(SystemManager, self).start(timeout=timeout)
         if not started:
             return False
@@ -128,7 +128,7 @@ class SystemManager(PeerRouter):
             self.log.info("terminating registration for '%s'", self.address)
             return False
 
-        self.log.info("System mananager '%s' started", self.address)
+        self.log.info("System manager '%s' started", self.address)
         return True
 
     def stop(self, timeout=60):
@@ -157,7 +157,10 @@ class SystemManager(PeerRouter):
                                    repr(States.REGISTERED),
                                    repr(self.clusterInfo.state)
                                    )
-                    time.sleep(1)
+                    devicesNotRegistered = self.getDevicesNotRegistered()
+                    if len(devicesNotRegistered) > 0:
+                        self.log.info("Waiting for devices to stop: %s", ", ".join(devicesNotRegistered))
+                    time.sleep(5)
                 else:
                     break
             else:
@@ -169,6 +172,18 @@ class SystemManager(PeerRouter):
                 client.forwardMessage(StopNode(self.address, terminate=True))
 
         return super(SystemManager, self).stop(timeout=timeout)
+
+    def getDevicesNotRegistered(self):
+        """
+        Build a list of devices on this node that are not in registered state.
+        :returns: list of device names
+        """
+        devices = Backend().configuration.getDevices(self.address, flatDeviceHierarchy=True)
+        devicesNotRegistered = []
+        for deviceInfo in devices.values():
+            if deviceInfo.state != States.REGISTERED:
+                devicesNotRegistered.append(deviceInfo.name)
+        return devicesNotRegistered
 
 @ClassLogger
 class SystemManagerImplementation(object):
@@ -602,11 +617,15 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
-        (_, device_name) = self.parseFrom(envelope.From)
+        (node, device_name) = self.parseFrom(envelope.From)
 
         # get device manager sub process
         deviceManager = self.deviceManagers.get(envelope.From)
         deviceManager.stop()
+
+        configuration = Backend().configuration
+        if message.get("state", None) and isinstance(message.get("state", None), States):
+            configuration.changeState(node, device_name, States.REGISTERED)
 
         # remove response from the related messages list
         originalMessageId = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
@@ -1147,12 +1166,6 @@ class SystemManagerImplementation(object):
         :type envelope: :class:`~c4.system.messages.Envelope`
         """
         self.log.debug("Received stop acknowledgement from '%s'", envelope.From)
-        (node, _) = self.parseFrom(envelope.From)
-        configuration = Backend().configuration
-        for device in message["devices"]:
-            self.log.debug("Changing %s/%s state from RUNNING to REGISTERED.", node, device)
-            configuration.changeState(node, device, States.REGISTERED)
-
         original_message_id = self.messageTracker.removeRelatedMessage(envelope.RelatesTo)
 
         if not self.messageTracker.hasMoreRelatedMessages(original_message_id):
