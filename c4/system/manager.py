@@ -1007,9 +1007,12 @@ class SystemManagerImplementation(object):
             if "devices" in message:
 
                 configuration = Backend().configuration
-                # change state of the device manager in the configuration to registered in the error case
+                # change state of the device manager to running for remaining devices not
+                # updated and registered in the error case
                 for name, info in message["devices"].items():
-                    if "error" in info:
+                    if "state" in info and isinstance(info["state"], States):
+                        configuration.changeState(node_name, name, States.RUNNING)
+                    elif "error" in info:
                         configuration.changeState(node_name, name, States.REGISTERED)
                         self.log.error(info["error"])
             else:
