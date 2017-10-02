@@ -1,3 +1,8 @@
+"""
+Copyright (c) IBM 2015-2017. All Rights Reserved.
+Project name: c4-system-manager
+This project is licensed under the MIT License, see LICENSE
+"""
 import sys
 
 from setuptools import setup, find_packages
@@ -19,7 +24,7 @@ setup(
     author = "IBM",
     author_email = "",
     description = "This library provides the system management framework for project C4",
-    license = "IBM",
+    license = "MIT",
     keywords = "python c4 sm",
     url = "",
     entry_points = {
